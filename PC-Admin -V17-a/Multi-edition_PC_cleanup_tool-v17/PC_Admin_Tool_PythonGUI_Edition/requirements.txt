@@ -1,0 +1,4 @@
+pypsrp[credssp]>=0.9.1
+
+# Kerberos transport (optional): also run  pip install "pypsrp[kerberos]"
+# (needs system libkrb5-dev on Linux first; nothing extra needed on Windows)

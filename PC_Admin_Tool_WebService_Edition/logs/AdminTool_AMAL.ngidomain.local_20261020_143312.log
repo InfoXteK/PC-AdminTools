@@ -1,0 +1,33 @@
+============================================================
+  PC ADMIN & PERFORMANCE TOOL  v3.7  -- Web-Service Edition
+  © 2024-2026 Abdullah | PC Admin & Performance Tool v3.7 | All Rights Reserved
+============================================================
+  Target   : AMAL.ngidomain.local
+  Username : mabdullahad@ngidomain.local
+  Transport: ntlm
+  Date/Time: 2026-10-20 14:33:12
+  Tasks    : 1 selected
+  Log File : AdminTool_AMAL.ngidomain.local_20261020_143312.log
+============================================================
+
+  Session established
+
+▶ [1/1]  Rename Computer (Domain-Joined)
+    Renames a domain-joined PC passing YOUR credential explicitly (-DomainCredential, then WMI Rename) -- no CredSSP needed; restart optional
+    ──────────────────────────────────────────────────
+      Current name : AMAL
+      New name     : HOUR-CSD
+      Domain       : NGIDOMAIN.LOCAL
+      Credential   : mabdullahad@ngidomain.local  (passed explicitly to the domain -- not relying on this WinRM logon)
+      [1/2] Rename-Computer -DomainCredential : SUCCESS
+      Rename submitted -- Auto-Restart is OFF. The new name will NOT take effect until
+      this computer restarts -- run 'Force Restart Now' (Power Recycle) when ready.
+    ✓ Completed in 5.1s
+
+
+============================================================
+  ALL TASKS COMPLETED ✓
+  Finished : 2026-10-20 14:33:18
+  Log saved: AdminTool_AMAL.ngidomain.local_20261020_143312.log
+  © 2024-2026 Abdullah | PC Admin & Performance Tool v3.7 | All Rights Reserved
+============================================================

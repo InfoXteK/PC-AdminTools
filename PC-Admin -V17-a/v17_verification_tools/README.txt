@@ -1,0 +1,1 @@
+Test/patch scripts used to build and verify v17 (paths are hard-coded to the original sandbox: /home/claude/v17 and a PowerShell 7.4.6 at /home/claude/pwsh). test_web.py / test_tk.py / ps_runtime_test.ps1 / parity.py are the regression suites; patch_*.py and bump17.py show exactly what was changed.
