@@ -1,15 +1,15 @@
 # PC Admin & Performance Tool — Complete Setup & User Guide
 
-**For:** `Multi-edition_PC_cleanup_tool-v17.zip` (PowerShell Edition v3.7 · Web-Service Edition v3.7 · Python GUI Edition v3.7)
+**For:** `Multi-edition_PC_cleanup_tool-v18.zip` (PowerShell Edition v3.8 · Web-Service Edition v3.8 · Python GUI Edition v3.8)
 
 **Who this is for:** written for someone who has never used PowerShell, never run a Python script, and doesn't know what a "port" or a "firewall rule" is. Every term is explained the first time it's used. If you already know this material, skip straight to whichever Part covers the edition you're installing.
 
-**What's new since your last copy of this guide (v3.7):**
+**What's new since your last copy of this guide (v3.8):**
 1. **Renaming a PC now works on domain-joined computers** (it failed with "Access is denied" before). See "Renaming a computer, step by step" in Part 4.
 2. **Network tasks no longer freeze the tool.** Flush DNS, Set Static IP, Set DHCP, Reset TCP/IP and adapter restarts used to cut the connection and leave the tool stuck until you closed it. They now run in the background on the target and the tool reconnects by itself and shows the real result. See "What happens when a task changes the network".
 3. **New tasks:** change the shadow-copy (VSS) size limit, DISM repair and cleanup, CHKDSK scan, a hardware report that works without WMIC, SSD retrim, WMI check, performance-counter rebuild.
 4. **New tab "Admin Consoles"** — opens Computer Management, Disk Management, Services, Event Viewer, Device Manager, Firewall, a remote PowerShell window, a remote command prompt, Remote Desktop and the C$ share, all pre-connected to the target with the user name and password you typed. See "Admin Consoles, step by step".
-5. **The Web edition now uses port 3038** (was 3037). Re-run `install_service.bat` (as Administrator) and use `:3038` in bookmarks.
+5. **The Web edition now uses port 3030** (was 3037). Re-run `install_service.bat` (as Administrator) and use `:3030` in bookmarks.
 
 ---
 
@@ -50,7 +50,7 @@ You only do this once per target computer. Do it now, on at least one test compu
 | **Credentials** | A username and password with admin rights ON THE TARGET |
 | **Elevated / Run as Administrator** | Running a program with full admin permissions — Windows will show a pop-up asking you to confirm this |
 | **Firewall rule** | A permission that tells Windows "allow this specific kind of network traffic through" |
-| **Port** | A number a running program listens on for connections, like a numbered mail slot. This tool's Web edition uses port **3038** |
+| **Port** | A number a running program listens on for connections, like a numbered mail slot. This tool's Web edition uses port **3030** |
 | **Service** | A program Windows runs in the background permanently, even if nobody is logged in — it starts automatically when the computer boots |
 | **UNC path** | A shared-folder address written as `\\servername\sharename` — the format every "map a network drive" field in this tool expects, see Part 4 |
 | **Mapped drive** | A shortcut, shown as a lettered drive (like `Z:`) in File Explorer, that actually points at a shared folder on another computer |
@@ -133,7 +133,7 @@ Open this any time in Notepad to review what happened, even after closing the to
 | A service name is rejected as invalid, even though you typed it correctly | **Fixed in this version.** Older copies of this tool wrongly rejected any service name containing a space (like "ManageEngine UEMS - Agent") | Update to this version. If it still happens, double-check you copied the exact **Service name** (not the longer, human-friendly "Display name") from Windows Services — use "List All Services" in this tool to see the exact spelling |
 | "Fix these before running" mentions a shared-folder path or drive letter | The UNC path, drive letter, or username you typed doesn't match the expected format | UNC path must start with `\\` and have no quotes in it; drive letter must be a single letter D–Z; username must be `DOMAIN\name`, `name@domain.com`, or `.\name` |
 | Drive-mapping task says the mapping was saved, but the drive doesn't appear right now | The target user either isn't signed in, or "connect it right now" was unchecked | The drive still appears automatically the next time that person signs in — this is expected, not an error |
-| A domain computer rename fails ("Access is denied", RPC or "second logon" error) | In v3.6 and older the tool did not pass a domain login to the rename (the "double hop" problem). **Fixed in v3.7** — the tool now builds the domain login itself | Use v3.7 and the **Domain-Joined** rename with a domain admin account (no CredSSP needed). If it still fails, read the decoded reason in the log — see "Renaming a computer, step by step" |
+| A domain computer rename fails ("Access is denied", RPC or "second logon" error) | In v3.6 and older the tool did not pass a domain login to the rename (the "double hop" problem). **Fixed in V3.8** — the tool now builds the domain login itself | Use V3.8 and the **Domain-Joined** rename with a domain admin account (no CredSSP needed). If it still fails, read the decoded reason in the log — see "Renaming a computer, step by step" |
 | The tool won't open at all | Very old Windows, or PowerShell blocked by company policy | Confirm you're on Windows 10/11; ask your IT department if PowerShell script execution is restricted |
 | Nothing visibly happens when you double-click `Run-AdminTool.bat` (no window, no error) | This edition deliberately hides its own PowerShell console window so it doesn't sit behind the tool's actual window — which used to also hide any startup crash completely. **Fixed in this version:** any such error is now saved to a file | Look for `PCAdminTool_last_error.log` in the same folder and open it in Notepad |
 
@@ -162,14 +162,14 @@ Double-click **`install_service.bat`** and approve the UAC prompt. This:
 - Installs any missing dependencies.
 - Removes any older copy of this service and its old firewall rule automatically, so you don't need to manually clean up an old version first. **On your very first-ever install, you'll see a line saying a service could not be found or was not running — that's completely normal** (there's nothing to remove yet); it's informational, not an error, and the install continues normally.
 - Registers it as a proper Windows Service (shows up in `services.msc`, starts automatically every time the computer boots, keeps running with no window open).
-- Opens the firewall for port **3038**.
+- Opens the firewall for port **3030**.
 
 Like test mode, this window shows a numbered `[CHECKPOINT ...]` line before and after every step, so if anything doesn't work, you'll be able to see exactly which step it was.
 
 ### Step 5 — Use it from any computer on the network
 On any OTHER computer on the same network, open a browser and go to:
 ```
-http://<hosting-computer-name-or-IP>:3038
+http://<hosting-computer-name-or-IP>:3030
 ```
 (Ask whoever set this up for the exact address if you don't know it.)
 
@@ -192,7 +192,7 @@ Double-click `uninstall_service.bat` (as Administrator). This stops the service,
 | `run_console_testmode.bat` or `install_service.bat` opens and closes again **instantly, before any checkpoint even appears** | **This was a genuine bug, fixed in v3.6** — an unescaped character in one of the launcher files made Windows abort the whole script before it could print anything. It was not caused by anything on your PC | Update to this version; this specific failure should no longer be possible in any launcher in this package |
 | Either window opens, prints one or more `[CHECKPOINT ...]` lines, then closes without reaching the final "Press any key" prompt | Something failed partway through — the checkpoints tell you where | Note the LAST checkpoint number shown — that pinpoints exactly where. If it is right after "Removing any previous version...", see the row above; that exact spot was the v3.6 bug |
 | `run_console_testmode.bat` or `install_service.bat` runs normally but `localhost` never responds | You likely already installed this tool as a permanent background service (Step 4), which is already using this same port — you don't need both running at once | Open `http://localhost:3037` directly (the already-running service may already be serving it), or stop the service first with `net stop PCAdminTool`, then try test mode again |
-| Browser can't reach `http://<host>:3038` at all | Service isn't running, or firewall is blocking it | Check `services.msc` on the host for "PC Admin & Performance Tool - Web Service"; confirm port 3037 is allowed through the host's firewall |
+| Browser can't reach `http://<host>:3030` at all | Service isn't running, or firewall is blocking it | Check `services.msc` on the host for "PC Admin & Performance Tool - Web Service"; confirm port 3037 is allowed through the host's firewall |
 | A service name is rejected as invalid, even though you typed it correctly | **Fixed in this version.** Older copies wrongly rejected any service name containing a space | Update to this version; use "List All Services" to copy the exact Name if unsure |
 | A shared-folder path, drive letter, or username shows a red border / "is not valid" message | Format doesn't match what's expected | UNC path needs `\\server\share` (no quotes); drive letter is one letter D–Z; username is `DOMAIN\name`, `name@domain.com`, or `.\name` |
 | Test Connection says "WinRM not reachable" | The TARGET doesn't have WinRM turned on | Go back to "Before you start" and run `Enable-PSRemoting -Force` on the TARGET (not the hosting computer) |
@@ -290,7 +290,7 @@ The task shows the size **before** and **after**. Making the limit smaller than 
 
 **Important — where the window appears:**
 - **PowerShell Edition and Python GUI Edition:** the window appears on **your own screen**.
-- **Web-Service Edition:** the window appears on the computer that **runs the web service**. If you installed the service on your own PC and use `http://localhost:3038`, that is your screen. If the service runs on a server and you browse from another PC, the window opens *on the server* — use one of the desktop editions for the consoles.
+- **Web-Service Edition:** the window appears on the computer that **runs the web service**. If you installed the service on your own PC and use `http://localhost:3030`, that is your screen. If the service runs on a server and you browse from another PC, the window opens *on the server* — use one of the desktop editions for the consoles.
 
 **Steps:** 1) Enter Hostname/IP, user, password, Test Connection. 2) Open the **Admin Consoles** tab. 3) Tick one task (you can tick several; they open one after another). 4) Run. 5) Read the lines under the task — they say what was launched and what to do if the window shows the wrong computer.
 
@@ -357,7 +357,7 @@ A task marked with "!" (or shown in a highlighted/red style, depending on editio
 | A field is rejected as invalid | The value doesn't match the expected format for that field | Every field's pop-up/tooltip help text shows an example of the expected format |
 | A service name specifically is rejected | You're on an older version with the space-in-service-name bug | Update to this version (fixed since v3.2) |
 | A mapped drive doesn't show up immediately | The target user wasn't signed in, or "connect now" was unchecked | It will appear automatically at their next sign-in — check with "List Mapped Network Drives" |
-| Domain rename fails with a login/RPC error | Fixed in v3.7 (no CredSSP needed any more). Remaining causes: wrong password, no rights, new name already exists in the directory, PC cannot reach a domain controller | Read the decoded reason line in the log and follow the table in "Renaming a computer, step by step" |
+| Domain rename fails with a login/RPC error | Fixed in V3.8 (no CredSSP needed any more). Remaining causes: wrong password, no rights, new name already exists in the directory, PC cannot reach a domain controller | Read the decoded reason line in the log and follow the table in "Renaming a computer, step by step" |
 
 ---
 
@@ -380,7 +380,7 @@ Set-Item WSMan:\localhost\Client\TrustedHosts -Value "*" -Force
 - **WinRM** — Windows' built-in remote-management feature; must be turned on with `Enable-PSRemoting -Force`.
 - **Credentials** — a username + password with admin rights on the target.
 - **Elevated / Run as Administrator** — running with full permissions; Windows asks you to confirm this.
-- **Port** — a numbered connection slot a running program listens on (this tool's Web edition: 3038).
+- **Port** — a numbered connection slot a running program listens on (this tool's Web edition: 3030).
 - **Service** — a background program that keeps running, starts on boot, with no window to keep open.
 - **Double-hop** — a known Windows limitation where credentials used for one remote connection can't automatically be reused for a second one (matters for domain computer rename).
 - **VSS / Shadow Copy** — Windows' snapshot system behind "Previous Versions" and System Restore points.
