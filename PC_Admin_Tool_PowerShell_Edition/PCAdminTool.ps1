@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.0
 # ============================================================
-#  PC Admin & Performance Tool  v3.6 -- PowerShell GUI Edition
+#  PC Admin & Performance Tool  v3.8 -- PowerShell GUI Edition
 #  (c) 2024-2026 Abdullah | All Rights Reserved
 #  Contact: abuabdullah.be@outlook.com
 # ============================================================
@@ -10,8 +10,8 @@ try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch {}
 try { [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false) } catch {}
 
 $COPY  = "(c) 2024-2026 Abdullah  |  All Rights Reserved  |  abuabdullah.be@outlook.com"
-$COPYL = "(c) 2024-2026 Abdullah  |  PC Admin & Performance Tool v3.6  |  All Rights Reserved  |  abuabdullah.be@outlook.com"
-$VER   = "v3.6  PowerShell GUI Edition"
+$COPYL = "(c) 2024-2026 Abdullah  |  PC Admin & Performance Tool v3.8  |  All Rights Reserved  |  abuabdullah.be@outlook.com"
+$VER   = "v3.8  PowerShell GUI Edition"
 $DIR   = if ($MyInvocation.MyCommand.Path) { Split-Path $MyInvocation.MyCommand.Path } else { $PWD.Path }
 $LOGD  = Join-Path $DIR "PC_Admin_Logs"
 if (-not (Test-Path $LOGD)) { New-Item -ItemType Directory -Path $LOGD | Out-Null }
@@ -28,7 +28,9 @@ $DANGER=@("flush_dns","net_reset","run_sfc","dism_check","high_perf","empty_recy
   "pr_cycle_usb_hubs","pr_force_restart","pr_disable_hibernation","pr_force_signout_restart","pr_full_soft_recycle",
   "rt_set_static_ip","rt_set_dhcp","rt_rename_pc_domain","rt_rename_pc_workgroup","rt_rename_pc_wmic_legacy",
   "rt_vss_delete_all","rt_vss_delete_volume_all","rt_vss_delete_oldest","rt_restart_service",
-  "rt_map_network_drive","rt_unmap_network_drive")
+  "rt_map_network_drive","rt_unmap_network_drive",
+  "rt_vss_resize_storage","run_dism_restorehealth","dism_component_cleanup","perf_rebuild_perf_counters",
+  "np_static_ip","np_dhcp","np_flush_dns","np_reset_tcpip")
 $TMAP=[ordered]@{
     "Windows Domain (NTLM) -- Recommended"="Negotiate"
     "Workgroup / Local Account (Basic)"="Basic"
@@ -56,7 +58,7 @@ function MF {
 }
 
 # ============================================================
-# OPERATIONS (67 total)
+# OPERATIONS (90 total)
 # ============================================================
 $Ops=@(
  @{Id="clear_user_temp";Cat="Cleanup";D=$false;L="Clear All Users Temp Files";Ds="Removes %TEMP% from every user profile (incl. SYSTEM/service accounts)"
@@ -680,7 +682,7 @@ $Ops=@(
    $ProgressPreference="SilentlyContinue"
    Write-Output "  Forcing an immediate restart -- any unsaved work on the target WILL be lost."
    Write-Output "  The connection will drop now; this is expected."
-   Restart-Computer -Force
+   shutdown.exe /r /f /t 3
    } }
  @{Id="pr_wake_armed_devices";Cat="Power Recycle";D=$false;L='List Devices Armed to Wake the System';Ds='powercfg /devicequery wake_armed (+ wake_programmable) -- diagnoses devices not waking correctly from sleep'
    Cmd={
@@ -699,12 +701,12 @@ $Ops=@(
    Write-Output "  Verifying available sleep states..."
    powercfg /a | ForEach-Object { Write-Output "  $_" }
    } }
- @{Id="pr_force_signout_restart";Cat="Power Recycle";D=$true;L='Force Sign-out & Restart (shutdown /g)';Ds='shutdown /g /f /t 0 -- restarts and reopens registered apps, distinct from a plain restart'
+ @{Id="pr_force_signout_restart";Cat="Power Recycle";D=$true;L='Force Sign-out & Restart (shutdown /g)';Ds='shutdown /g /f /t 3 -- restarts and reopens registered apps, distinct from a plain restart'
    Cmd={
    $ProgressPreference="SilentlyContinue"
    Write-Output "  Signing out and restarting now (shutdown /g) -- Windows will try to reopen registered apps on next login."
    Write-Output "  Any unsaved work WILL be lost. The connection will drop now; this is expected."
-   shutdown /g /f /t 0
+   shutdown /g /f /t 3
    } }
  @{Id="pr_full_soft_recycle";Cat="Power Recycle";D=$true;L='Full Soft-Recycle Bundle (Network + USB Cycle, Restart Optional)';Ds='LAST RESORT before a real power cycle: restarts every adapter, cycles every USB device, then restarts Windows unless Auto-Restart is unchecked'
    Prm=@(
@@ -728,7 +730,7 @@ $Ops=@(
 
    if ($autoRestart) {
        Write-Output "  [3/3] Restarting the computer now (shutdown /g)..."
-       shutdown /g /f /t 0
+       shutdown /g /f /t 3
    } else {
        Write-Output "  [3/3] Auto-Restart is OFF -- network + USB cycle complete, restart skipped."
        Write-Output "  Run 'Force Restart Now' or 'Force Sign-out & Restart' (Power Recycle) manually when ready."
@@ -753,28 +755,72 @@ $Ops=@(
    $dns1 = "{{DNS1}}"
    $dns2 = "{{DNS2}}"
 
-   $nic = Get-NetAdapter -Name $adapterName -EA SilentlyContinue
+   $nic = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
    if (-not $nic) {
        Write-Output "  Adapter '$adapterName' not found. Available adapters:"
-       Get-NetAdapter -EA SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
+       Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
        return
    }
 
-   Write-Output "  Setting static IP on '$adapterName': $ip / $mask, gateway $gw"
-   netsh interface ipv4 set address name="$adapterName" static $ip $mask $gw 2>&1 | ForEach-Object { Write-Output "  $_" }
+   $prefix = 0
+   foreach ($o in $mask.Split('.')) { $prefix += ([Convert]::ToString([int]$o, 2).ToCharArray() | Where-Object { $_ -eq '1' }).Count }
 
-   if ($dns1) {
-       Write-Output "  Setting primary DNS: $dns1"
-       netsh interface ipv4 set dns name="$adapterName" static $dns1 primary 2>&1 | ForEach-Object { Write-Output "  $_" }
-   }
-   if ($dns2) {
-       Write-Output "  Adding secondary DNS: $dns2"
-       netsh interface ipv4 add dns name="$adapterName" $dns2 index=2 2>&1 | ForEach-Object { Write-Output "  $_" }
+   function Get-Missing {
+       $m = @()
+       $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $ip } | Select-Object -First 1
+       if (-not $a) { $m += 'IP address' }
+       elseif ($a.PrefixLength -ne $prefix) { $m += 'subnet mask' }
+       $c = Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue
+       if (-not (@($c.IPv4DefaultGateway.NextHop) -contains $gw)) { $m += 'default gateway' }
+       $d = @((Get-DnsClientServerAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
+       if ($dns1 -and $d[0] -ne $dns1) { $m += 'primary DNS' }
+       if ($dns2 -and $d[1] -ne $dns2) { $m += 'secondary DNS' }
+       return $m
    }
 
-   Start-Sleep -Seconds 2
+   function Set-AllAtOnce {
+       # IP + mask + gateway + DNS are pushed back-to-back in ONE pass (no output handling,
+       # no waiting between them) so the connection drop cannot leave a half-applied setup.
+       $o1 = netsh interface ipv4 set address name="$adapterName" static $ip $mask $gw 2>&1
+       $o2 = $null
+       $o3 = $null
+       if ($dns1) { $o2 = netsh interface ipv4 set dnsservers name="$adapterName" static $dns1 primary validate=no 2>&1 }
+       if ($dns2) { $o3 = netsh interface ipv4 add dnsservers name="$adapterName" $dns2 index=2 validate=no 2>&1 }
+       foreach ($x in @($o1) + @($o2) + @($o3)) { if ("$x".Trim()) { Write-Output "  $x" } }
+   }
+
+   Write-Output "  Target configuration on '$adapterName': $ip / $mask (/$prefix), gateway $gw, DNS $dns1 $dns2"
+   $haveCheck = [bool](Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue)
+   if (-not $haveCheck) {
+       Set-AllAtOnce
+       Start-Sleep -Seconds 3
+   } else {
+       $missing = @(Get-Missing)
+       if ($missing.Count -eq 0) {
+           Write-Output "  Already configured exactly like this -- nothing to change."
+       } else {
+           $attempt = 0
+           while ($attempt -lt 3 -and $missing.Count -gt 0) {
+               $attempt++
+               Write-Output "  Applying IP, mask, gateway and DNS together (attempt $attempt of 3)..."
+               Set-AllAtOnce
+               $until = (Get-Date).AddSeconds(20)
+               do {
+                   Start-Sleep -Seconds 2
+                   $missing = @(Get-Missing)
+               } while ($missing.Count -gt 0 -and (Get-Date) -lt $until)
+               if ($missing.Count -gt 0) { Write-Output "  Not applied yet: $($missing -join ', ')" }
+           }
+       }
+       if ($missing.Count -eq 0) {
+           Write-Output "  VERIFIED: IP address, subnet mask, gateway and DNS all match the requested values."
+       } else {
+           Write-Output "  WARNING: after 3 attempts these are still not applied: $($missing -join ', ')"
+       }
+   }
+
    Write-Output "  === RESULTING CONFIGURATION ==="
-   Get-NetIPConfiguration -InterfaceAlias $adapterName -EA SilentlyContinue | ForEach-Object {
+   Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
        Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
        Write-Output "  Gateway      : $($_.IPv4DefaultGateway.NextHop)"
        Write-Output "  DNS Servers  : $($_.DNSServer.ServerAddresses -join ', ')"
@@ -787,93 +833,223 @@ $Ops=@(
    Cmd={
    $ProgressPreference="SilentlyContinue"
    $adapterName = "{{ADAPTER}}"
-   $nic = Get-NetAdapter -Name $adapterName -EA SilentlyContinue
+   $nic = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
    if (-not $nic) {
        Write-Output "  Adapter '$adapterName' not found. Available adapters:"
-       Get-NetAdapter -EA SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
+       Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
        return
    }
-   Write-Output "  Switching '$adapterName' to DHCP..."
-   netsh interface ipv4 set address name="$adapterName" source=dhcp 2>&1 | ForEach-Object { Write-Output "  $_" }
-   netsh interface ipv4 set dnsservers name="$adapterName" source=dhcp 2>&1 | ForEach-Object { Write-Output "  $_" }
+   Write-Output "  Switching '$adapterName' to DHCP (address + DNS together)..."
+   $o1 = netsh interface ipv4 set address name="$adapterName" source=dhcp 2>&1
+   $o2 = netsh interface ipv4 set dnsservers name="$adapterName" source=dhcp 2>&1
+   foreach ($x in @($o1) + @($o2)) { if ("$x".Trim()) { Write-Output "  $x" } }
    ipconfig /renew "$adapterName" | Out-Null
-   Start-Sleep -Seconds 2
+   if (Get-Command Get-NetIPInterface -ErrorAction SilentlyContinue) {
+       $until = (Get-Date).AddSeconds(25)
+       $ok = $false
+       do {
+           Start-Sleep -Seconds 2
+           $i = Get-NetIPInterface -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue
+           $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1
+           if ($i -and $i.Dhcp -eq 'Enabled' -and $a) { $ok = $true }
+       } while (-not $ok -and (Get-Date) -lt $until)
+       if ($ok) { Write-Output "  VERIFIED: DHCP is enabled and a lease was obtained ($($a.IPAddress))." }
+       else { Write-Output "  WARNING: DHCP is set, but no lease was obtained within 25 s (no DHCP server reachable yet?)." }
+   }
    Write-Output "  === RESULTING CONFIGURATION ==="
-   Get-NetIPConfiguration -InterfaceAlias $adapterName -EA SilentlyContinue | ForEach-Object {
+   Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
        Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
        Write-Output "  Gateway      : $($_.IPv4DefaultGateway.NextHop)"
        Write-Output "  DNS Servers  : $($_.DNSServer.ServerAddresses -join ', ')"
    }
    } }
- @{Id="rt_rename_pc_domain";Cat="Remote Tools";D=$true;L='Rename Computer (Domain-Joined)';Ds='Rename-Computer using this session''s own credentials -- restart is optional; use CredSSP transport if it fails (double-hop)'
+ @{Id="rt_rename_pc_domain";Cat="Remote Tools";D=$true;NC=$true;L='Rename Computer (Domain-Joined)';Ds='Renames a domain member using the username/password you connected with as an explicit domain credential (no CredSSP needed); restart optional'
    Prm=@(
      @{Key="NEW_NAME";Kind="computername";Label='New Computer Name';Req=$true},
      @{Key="AUTO_RESTART";Kind="bool";Label='Automatically restart when done';Req=$true;Def='true';Help='Unchecked: rename now, restart later yourself'}
    )
    Cmd={
    $ProgressPreference="SilentlyContinue"
+   $hint = {
+       param($c)
+       switch ([string]$c) {
+           '5'    { 'Access denied: the account you connected with is not allowed to rename this computer object in AD (needs Domain Admin or delegated "rename computer" rights), or is not a local admin on the target.' }
+           '53'   { 'Network path not found: the target cannot reach a domain controller (check DNS / VPN / firewall on the target).' }
+           '87'   { 'Invalid parameter: the new name is not accepted (NetBIOS rules: max 15 chars, letters/digits/hyphen).' }
+           '1326' { 'Logon failure: the username/password you connected with was rejected by the domain controller.' }
+           '1355' { 'The domain, or a domain controller for it, could not be contacted from the target (DNS).' }
+           '1909' { 'That account is locked out.' }
+           '2224' { 'A computer account with the NEW name already exists in AD -- pick a different name or delete the stale account first.' }
+           '2691' { 'The computer is already joined to that name/domain.' }
+           default { "Win32 code $c." }
+       }
+   }
+
    $newName = "{{NEW_NAME}}"
    $autoRestart = {{AUTO_RESTART}}
-   Write-Output "  Current name: $env:COMPUTERNAME"
-   Write-Output "  Renaming to : $newName  (domain-joined, using this session's own credentials)"
-   Write-Output "  NOTE: if this fails with an RPC/access or 'second logon' style error, reconnect with"
-   Write-Output "  Auth Transport = 'Admin Double-Hop (CredSSP)' -- domain rename over WinRM is a classic"
-   Write-Output "  double-hop scenario that plain NTLM cannot always complete."
+   $cs = Get-CimInstance Win32_ComputerSystem
+   Write-Output "  Current name : $($cs.Name)"
+   Write-Output "  Renaming to  : $newName"
+   Write-Output "  Membership   : $(if ($cs.PartOfDomain) { 'DOMAIN ' + $cs.Domain } else { 'WORKGROUP ' + $cs.Domain })"
+   if (-not $cs.PartOfDomain) {
+       Write-Output "  This target is NOT domain-joined -- use 'Rename Computer (Workgroup/Local)' instead. Nothing was changed."
+       return
+   }
+   if ($cs.Name -ieq $newName) { Write-Output "  Computer is already named $newName -- nothing to do."; return }
+   Write-Output "  Using the username/password you connected with as an explicit DOMAIN credential"
+   Write-Output "  (built on the target, so no CredSSP / double-hop is needed)."
+   $done = $false
    try {
+       Rename-Computer -NewName $newName -DomainCredential $__cred -Force -ErrorAction Stop
+       $done = $true
+       Write-Output "  Method 1 (Rename-Computer -DomainCredential) succeeded."
+   } catch {
+       Write-Output "  Method 1 failed: $($_.Exception.Message)"
+   }
+   if (-not $done) {
+       try {
+           $r = Invoke-CimMethod -InputObject (Get-CimInstance Win32_ComputerSystem) -MethodName Rename -Arguments @{ Name = $newName; UserName = $__cred.UserName; Password = $__cred.GetNetworkCredential().Password } -ErrorAction Stop
+           if ($r.ReturnValue -eq 0) { $done = $true; Write-Output "  Method 2 (WMI Win32_ComputerSystem.Rename) succeeded." }
+           else { Write-Output "  Method 2 failed, code $($r.ReturnValue): $(& $hint $r.ReturnValue)" }
+       } catch {
+           Write-Output "  Method 2 failed: $($_.Exception.Message)"
+       }
+   }
+   if (-not $done) {
+       Write-Output "  Rename FAILED -- nothing was changed."
+       Write-Output "  Check: (1) the account is Domain Admin / has rename rights on the computer object,"
+       Write-Output "         (2) the target can resolve + reach a domain controller,"
+       Write-Output "         (3) no AD computer account with the new name already exists."
+       try { Write-Output "  Secure channel to domain: $(Test-ComputerSecureChannel)" } catch { Write-Output "  Secure channel test could not run: $($_.Exception.Message)" }
+   }
+
+   if ($done) {
        if ($autoRestart) {
-           Rename-Computer -NewName $newName -Force -Restart -EA Stop
-           Write-Output "  Rename submitted -- the target is restarting now."
+           shutdown.exe /r /t 15 /c "PC Admin Tool: computer rename to $newName" | Out-Null
+           Write-Output "  Rename submitted -- target restarts in 15 seconds (the session will drop; that is expected)."
        } else {
-           Rename-Computer -NewName $newName -Force -EA Stop
            Write-Output "  Rename submitted -- Auto-Restart is OFF. The new name will NOT take effect until"
            Write-Output "  this computer restarts -- run 'Force Restart Now' (Power Recycle) when ready."
        }
-   } catch {
-       Write-Output "  Rename FAILED: $($_.Exception.Message)"
-       Write-Output "  Most common cause: NTLM double-hop restriction. Retry with CredSSP or Kerberos-with-delegation."
    }
    } }
- @{Id="rt_rename_pc_workgroup";Cat="Remote Tools";D=$true;L='Rename Computer (Workgroup/Local)';Ds='Rename-Computer with no domain credential -- restart is optional; for non-domain-joined targets'
+ @{Id="rt_rename_pc_workgroup";Cat="Remote Tools";D=$true;NC=$true;L='Rename Computer (Workgroup/Local)';Ds='Local rename for NON-domain targets (refuses on a domain member and says so); restart optional'
    Prm=@(
      @{Key="NEW_NAME";Kind="computername";Label='New Computer Name';Req=$true},
      @{Key="AUTO_RESTART";Kind="bool";Label='Automatically restart when done';Req=$true;Def='true';Help='Unchecked: rename now, restart later yourself'}
    )
    Cmd={
    $ProgressPreference="SilentlyContinue"
+   $hint = {
+       param($c)
+       switch ([string]$c) {
+           '5'    { 'Access denied: the account you connected with is not allowed to rename this computer object in AD (needs Domain Admin or delegated "rename computer" rights), or is not a local admin on the target.' }
+           '53'   { 'Network path not found: the target cannot reach a domain controller (check DNS / VPN / firewall on the target).' }
+           '87'   { 'Invalid parameter: the new name is not accepted (NetBIOS rules: max 15 chars, letters/digits/hyphen).' }
+           '1326' { 'Logon failure: the username/password you connected with was rejected by the domain controller.' }
+           '1355' { 'The domain, or a domain controller for it, could not be contacted from the target (DNS).' }
+           '1909' { 'That account is locked out.' }
+           '2224' { 'A computer account with the NEW name already exists in AD -- pick a different name or delete the stale account first.' }
+           '2691' { 'The computer is already joined to that name/domain.' }
+           default { "Win32 code $c." }
+       }
+   }
+
    $newName = "{{NEW_NAME}}"
    $autoRestart = {{AUTO_RESTART}}
-   Write-Output "  Current name: $env:COMPUTERNAME"
-   Write-Output "  Renaming to : $newName  (workgroup/local -- no domain credential involved)"
+   $cs = Get-CimInstance Win32_ComputerSystem
+   Write-Output "  Current name : $($cs.Name)"
+   Write-Output "  Renaming to  : $newName"
+   Write-Output "  Membership   : $(if ($cs.PartOfDomain) { 'DOMAIN ' + $cs.Domain } else { 'WORKGROUP ' + $cs.Domain })"
+   if ($cs.PartOfDomain) {
+       Write-Output "  This target IS joined to domain $($cs.Domain). A local-only rename would leave its AD computer"
+       Write-Output "  account out of sync and can break domain logon -- use 'Rename Computer (Domain-Joined)'. Nothing was changed."
+       return
+   }
+   if ($cs.Name -ieq $newName) { Write-Output "  Computer is already named $newName -- nothing to do."; return }
+   $done = $false
    try {
+       Rename-Computer -NewName $newName -Force -ErrorAction Stop
+       $done = $true
+       Write-Output "  Method 1 (Rename-Computer) succeeded."
+   } catch {
+       Write-Output "  Method 1 failed: $($_.Exception.Message)"
+   }
+   if (-not $done) {
+       try {
+           $r = Invoke-CimMethod -InputObject (Get-CimInstance Win32_ComputerSystem) -MethodName Rename -Arguments @{ Name = $newName } -ErrorAction Stop
+           if ($r.ReturnValue -eq 0) { $done = $true; Write-Output "  Method 2 (WMI Win32_ComputerSystem.Rename) succeeded." }
+           else { Write-Output "  Method 2 failed, code $($r.ReturnValue): $(& $hint $r.ReturnValue)" }
+       } catch {
+           Write-Output "  Method 2 failed: $($_.Exception.Message)"
+       }
+   }
+   if (-not $done) {
+       Write-Output "  Rename FAILED -- nothing was changed."
+       Write-Output "  If you connected with a LOCAL (non-domain) admin account that is not the built-in Administrator,"
+       Write-Output "  Windows remote UAC filtering blocks this. Fix on the target (Admin PowerShell):"
+       Write-Output "    reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f"
+   }
+
+   if ($done) {
        if ($autoRestart) {
-           Rename-Computer -NewName $newName -Force -Restart -EA Stop
-           Write-Output "  Rename submitted -- the target is restarting now."
+           shutdown.exe /r /t 15 /c "PC Admin Tool: computer rename to $newName" | Out-Null
+           Write-Output "  Rename submitted -- target restarts in 15 seconds (the session will drop; that is expected)."
        } else {
-           Rename-Computer -NewName $newName -Force -EA Stop
            Write-Output "  Rename submitted -- Auto-Restart is OFF. The new name will NOT take effect until"
            Write-Output "  this computer restarts -- run 'Force Restart Now' (Power Recycle) when ready."
        }
-   } catch {
-       Write-Output "  Rename FAILED: $($_.Exception.Message)"
    }
    } }
- @{Id="rt_rename_pc_wmic_legacy";Cat="Remote Tools";D=$true;L='Rename Computer via WMIC (Legacy -- Manual Restart Required)';Ds='wmic computersystem ... call rename -- for old targets only; WMIC is removed on Windows 11 24H2+'
+ @{Id="rt_rename_pc_wmic_legacy";Cat="Remote Tools";D=$true;NC=$true;L='Rename Computer via WMIC (Legacy -- Manual Restart Required)';Ds='WMIC where present; automatically uses the same WMI rename method via CIM when WMIC is removed (Win11 24H2+) or the target is domain-joined'
    Prm=@(
      @{Key="NEW_NAME";Kind="computername";Label='New Computer Name';Req=$true}
    )
    Cmd={
    $ProgressPreference="SilentlyContinue"
-   $newName = "{{NEW_NAME}}"
-   Write-Output "  WARNING: WMIC is deprecated and removed by default on Windows 11 24H2+ / recent Server builds."
-   Write-Output "  Prefer 'Rename Computer (Domain-Joined)' or 'Rename Computer (Workgroup/Local)' on modern targets."
-   $wmicPath = Get-Command wmic.exe -EA SilentlyContinue
-   if (-not $wmicPath) {
-       Write-Output "  wmic.exe was not found on this target -- it has been removed. Use the Rename-Computer operations instead."
-       return
+   $hint = {
+       param($c)
+       switch ([string]$c) {
+           '5'    { 'Access denied: the account you connected with is not allowed to rename this computer object in AD (needs Domain Admin or delegated "rename computer" rights), or is not a local admin on the target.' }
+           '53'   { 'Network path not found: the target cannot reach a domain controller (check DNS / VPN / firewall on the target).' }
+           '87'   { 'Invalid parameter: the new name is not accepted (NetBIOS rules: max 15 chars, letters/digits/hyphen).' }
+           '1326' { 'Logon failure: the username/password you connected with was rejected by the domain controller.' }
+           '1355' { 'The domain, or a domain controller for it, could not be contacted from the target (DNS).' }
+           '1909' { 'That account is locked out.' }
+           '2224' { 'A computer account with the NEW name already exists in AD -- pick a different name or delete the stale account first.' }
+           '2691' { 'The computer is already joined to that name/domain.' }
+           default { "Win32 code $c." }
+       }
    }
-   $result = wmic computersystem where "name='$env:COMPUTERNAME'" call rename name="$newName" 2>&1
-   $result | ForEach-Object { Write-Output "  $_" }
-   Write-Output "  Rename submitted via WMIC -- this does NOT auto-restart. Run 'Force Restart Now' (Power Recycle) when ready."
+
+   $newName = "{{NEW_NAME}}"
+   $cs = Get-CimInstance Win32_ComputerSystem
+   Write-Output "  Current name : $($cs.Name)"
+   Write-Output "  Renaming to  : $newName"
+   Write-Output "  Membership   : $(if ($cs.PartOfDomain) { 'DOMAIN ' + $cs.Domain } else { 'WORKGROUP ' + $cs.Domain })"
+   if ($cs.Name -ieq $newName) { Write-Output "  Computer is already named $newName -- nothing to do."; return }
+   $wmic = Get-Command wmic.exe -ErrorAction SilentlyContinue
+   $done = $false
+   if ($wmic -and -not $cs.PartOfDomain) {
+       Write-Output "  wmic.exe found -- using it (workgroup target)."
+       $result = wmic computersystem where "name='$env:COMPUTERNAME'" call rename name="$newName" 2>&1
+       $result | ForEach-Object { Write-Output "  $_" }
+       if (($result | Out-String) -match 'ReturnValue = 0') { $done = $true }
+   } else {
+       if (-not $wmic) { Write-Output "  wmic.exe is not present on this target (removed in Windows 11 24H2+) -- using the same WMI method through CIM instead." }
+       else { Write-Output "  Domain-joined target: using the WMI rename method via CIM with your credentials (avoids putting a password on a wmic command line)." }
+       try {
+           if ($cs.PartOfDomain) { $args2 = @{ Name = $newName; UserName = $__cred.UserName; Password = $__cred.GetNetworkCredential().Password } }
+           else { $args2 = @{ Name = $newName } }
+           $r = Invoke-CimMethod -InputObject (Get-CimInstance Win32_ComputerSystem) -MethodName Rename -Arguments $args2 -ErrorAction Stop
+           if ($r.ReturnValue -eq 0) { $done = $true; Write-Output "  WMI Win32_ComputerSystem.Rename succeeded." }
+           else { Write-Output "  WMI rename failed, code $($r.ReturnValue): $(& $hint $r.ReturnValue)" }
+       } catch {
+           Write-Output "  WMI rename failed: $($_.Exception.Message)"
+       }
+   }
+   if ($done) { Write-Output "  Rename submitted -- this does NOT auto-restart. Run 'Force Restart Now' (Power Recycle) when ready." }
+   else { Write-Output "  Rename FAILED -- nothing was changed." }
    } }
  @{Id="rt_vss_view";Cat="Remote Tools";D=$false;L='VSS Shadow Copy Storage Report';Ds='vssadmin list shadowstorage + list shadows -- size/usage per volume and every shadow copy instance'
    Cmd={
@@ -941,16 +1117,6 @@ $Ops=@(
            Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -EA SilentlyContinue | Format-List * | Out-String | Write-Output
        }
    }
-   } }
- @{Id="rt_open_computer_management";Cat="Remote Tools";D=$false;L='Open Computer Management (Connected to Target)';Ds='Launches mmc.exe compmgmt.msc /computer:\\<target> locally on the machine running this edition, connected to the target'
-   Cmd={
-   $ProgressPreference="SilentlyContinue"
-   # Handled specially by the host application -- never actually sent to the remote target.
-   # Desktop editions (PowerShell / Python GUI) launch locally:
-   #   mmc.exe compmgmt.msc /computer:\\<target>
-   # The Web edition returns that command as text instead of executing anything,
-   # since a server cannot open a window on your screen.
-   Write-Output "  (informational placeholder -- see description)"
    } }
  @{Id="rt_restart_service";Cat="Remote Tools";D=$true;L='Restart a Specific Service';Ds='Restart-Service -Force by exact service Name, reporting status before and after'
    Prm=@(
@@ -1573,6 +1739,338 @@ Write-Output ""
 Write-Output "  Note: this lists what is SAVED in the profile (reconnected at every sign-in). Whether a drive is connected"
 Write-Output "  right now is only visible inside that user's own session -- ask them to open This PC, or check for a red X."
    } }
+ @{Id="rt_vss_resize_storage";Cat="Remote Tools";D=$true;L='Resize VSS Shadow Storage (Max Size)';Ds='vssadmin resize shadowstorage /for= /on= /maxsize= -- set the storage cap for shadow copies on a volume (shrinking may delete the oldest copies)'
+   Prm=@(
+     @{Key="VOLUME";Kind="drive";Label='Volume';Req=$true;Def='C'},
+     @{Key="MAXSIZE";Kind="vsssize";Label='Max size (e.g. 10%, 20GB, 51200MB, UNBOUNDED)';Req=$true;Def='10%';Help='10% | 20GB | 51200MB | UNBOUNDED  (minimum 1MB)'}
+   )
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   $vol = "{{VOLUME}}"
+   $size = "{{MAXSIZE}}"
+   Write-Output "  === BEFORE (volume $vol) ==="
+   vssadmin list shadowstorage /for=$vol 2>&1 | ForEach-Object { Write-Output "  $_" }
+   Write-Output ""
+   Write-Output "  Setting maximum shadow storage on $vol to $size ..."
+   $out = vssadmin resize shadowstorage /for=$vol /on=$vol /maxsize=$size 2>&1
+   $out | ForEach-Object { Write-Output "  $_" }
+   if ($LASTEXITCODE -ne 0) {
+       Write-Output "  RESIZE FAILED (exit $LASTEXITCODE). Typical causes: no shadow storage association exists yet for this volume"
+       Write-Output "  (create a shadow copy first), the size is below 1MB, or the volume letter is wrong."
+   }
+   Write-Output ""
+   Write-Output "  === AFTER ==="
+   vssadmin list shadowstorage /for=$vol 2>&1 | ForEach-Object { Write-Output "  $_" }
+   } }
+ @{Id="run_dism_restorehealth";Cat="Windows Health";D=$true;LG=$true;L='DISM RestoreHealth (Repair Component Store)';Ds='DISM /Online /Cleanup-Image /RestoreHealth -- repairs a corrupt component store from Windows Update; can take 10-30 min (runs detached, tool waits)'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   Write-Output "  Running DISM RestoreHealth (needs the target to reach Windows Update or a repair source)..."
+   DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+   Write-Output "  DISM exit code: $LASTEXITCODE  (0 = success, 3010 = success but reboot needed)"
+   Write-Output "  Tip: run 'Run System File Checker (SFC)' afterwards."
+   } }
+ @{Id="dism_component_cleanup";Cat="Windows Health";D=$true;LG=$true;L='DISM Component Store Cleanup (WinSxS)';Ds='DISM /AnalyzeComponentStore then /StartComponentCleanup -- reclaims space from superseded updates (optionally /ResetBase)'
+   Prm=@(
+     @{Key="RESET_BASE";Kind="bool";Label='Also /ResetBase (permanent: installed updates can no longer be uninstalled)';Req=$true;Def='false';Help='Leave unchecked unless you need the extra space; ResetBase cannot be undone'}
+   )
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   $resetBase = {{RESET_BASE}}
+   Write-Output "  === ANALYZE COMPONENT STORE ==="
+   DISM /Online /Cleanup-Image /AnalyzeComponentStore 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+   Write-Output ""
+   if ($resetBase) {
+       Write-Output "  === START COMPONENT CLEANUP /ResetBase ==="
+       DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+   } else {
+       Write-Output "  === START COMPONENT CLEANUP ==="
+       DISM /Online /Cleanup-Image /StartComponentCleanup 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+   }
+   Write-Output "  DISM exit code: $LASTEXITCODE"
+   } }
+ @{Id="perf_hardware_report_cim";Cat="Performance";D=$false;L='Hardware Inventory via CIM (WMIC Replacement)';Ds='CPU, RAM modules, disks, BIOS, GPU, board -- what ''wmic cpu/memorychip/diskdrive/bios get'' used to show (WMIC is removed on Win11 24H2+)'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   Write-Output "  === CPU ==="
+   Get-CimInstance Win32_Processor | ForEach-Object { Write-Output "  $($_.Name.Trim())  cores=$($_.NumberOfCores) threads=$($_.NumberOfLogicalProcessors) maxMHz=$($_.MaxClockSpeed) load=$($_.LoadPercentage)%" }
+   Write-Output "  === MEMORY MODULES ==="
+   Get-CimInstance Win32_PhysicalMemory | ForEach-Object { Write-Output "  $($_.DeviceLocator): $([math]::Round($_.Capacity/1GB,1)) GB  $($_.Speed) MHz  $($_.Manufacturer)" }
+   $os = Get-CimInstance Win32_OperatingSystem
+   Write-Output "  RAM free now: $([math]::Round($os.FreePhysicalMemory/1MB,2)) GB of $([math]::Round($os.TotalVisibleMemorySize/1MB,2)) GB"
+   Write-Output "  === DISKS ==="
+   Get-CimInstance Win32_DiskDrive | ForEach-Object { Write-Output "  $($_.Model)  $([math]::Round($_.Size/1GB,0)) GB  status=$($_.Status)  iface=$($_.InterfaceType)" }
+   Write-Output "  === BIOS / BOARD ==="
+   $b = Get-CimInstance Win32_BIOS; Write-Output "  BIOS: $($b.Manufacturer) $($b.SMBIOSBIOSVersion)  serial=$($b.SerialNumber)"
+   $bb = Get-CimInstance Win32_BaseBoard; Write-Output "  Board: $($bb.Manufacturer) $($bb.Product)"
+   Write-Output "  === GPU ==="
+   Get-CimInstance Win32_VideoController | ForEach-Object { Write-Output "  $($_.Name)  driver=$($_.DriverVersion)" }
+   } }
+ @{Id="perf_trim_ssd";Cat="Performance";D=$false;L='Retrim an SSD Volume (Optimize-Volume -ReTrim)';Ds='Optimize-Volume -ReTrim -- tells the SSD which blocks are free (skips safely on HDDs)'
+   Prm=@(
+     @{Key="VOLUME";Kind="drive";Label='Drive letter';Req=$true;Def='C'}
+   )
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   $vol = "{{VOLUME}}".TrimEnd(':')
+   $v = Get-Volume -DriveLetter $vol -ErrorAction SilentlyContinue
+   if (-not $v) { Write-Output "  Volume $vol`: not found."; return }
+   $part = Get-Partition -DriveLetter $vol -ErrorAction SilentlyContinue
+   $disk = if ($part) { Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object { $_.DeviceId -eq $part.DiskNumber } } else { $null }
+   Write-Output "  Volume $vol`: media type = $(if ($disk) { $disk.MediaType } else { 'unknown' })"
+   if ($disk -and $disk.MediaType -eq 'HDD') { Write-Output "  This is a spinning disk -- ReTrim does not apply. Use 'Defragment' instead. Nothing done."; return }
+   Optimize-Volume -DriveLetter $vol -ReTrim -ErrorAction SilentlyContinue -Verbose 4>&1 | ForEach-Object { Write-Output "  $_" }
+   Write-Output "  Retrim finished."
+   } }
+ @{Id="perf_wmi_verify_repository";Cat="Performance";D=$false;L='Verify WMI Repository Health (winmgmt)';Ds='winmgmt /verifyrepository -- a corrupt WMI repository makes CIM/WMI-based operations and monitoring slow or failing (read-only check)'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   Write-Output "  Verifying the WMI repository (read-only)..."
+   $r = winmgmt /verifyrepository 2>&1
+   $r | ForEach-Object { Write-Output "  $_" }
+   if (($r | Out-String) -match 'inconsistent') { Write-Output "  Repository is INCONSISTENT -- consider 'winmgmt /salvagerepository' on the target (Admin), then a restart." }
+   } }
+ @{Id="perf_rebuild_perf_counters";Cat="Performance";D=$true;L='Rebuild Performance Counters (lodctr /R)';Ds='lodctr /R -- rebuilds a corrupt performance-counter registry (fixes empty/blank Task Manager, perfmon and monitoring-agent counters)'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   Write-Output "  Rebuilding performance counters (lodctr /R)..."
+   $r = lodctr /R 2>&1
+   $r | ForEach-Object { Write-Output "  $_" }
+   Write-Output "  Re-syncing with WMI performance adapter..."
+   winmgmt /resyncperf 2>&1 | ForEach-Object { Write-Output "  $_" }
+   Write-Output "  Done. Monitoring tools may need a restart to pick the counters up."
+   } }
+ @{Id="chkdsk_online_scan";Cat="Disk";D=$false;LG=$true;L='CHKDSK Online Scan (Read-Only)';Ds='chkdsk X: /scan -- online, read-only scan of a volume for file-system errors (no dismount, no repair; runs detached, tool waits)'
+   Prm=@(
+     @{Key="VOLUME";Kind="drive";Label='Drive letter';Req=$true;Def='C'}
+   )
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   $vol = "{{VOLUME}}"
+   Write-Output "  Online read-only scan of $vol (this can take several minutes)..."
+   chkdsk $vol /scan 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+   Write-Output "  chkdsk exit code: $LASTEXITCODE  (0 = no errors, 1 = errors found/fixed, 2/3 = cleanup needed)"
+   } }
+ @{Id="rt_open_computer_management";Cat="Admin Consoles";D=$false;L='Open Computer Management (Connected to Target)';Ds='mmc compmgmt.msc /computer:\\<target> -- Disk Management, Device Manager (read-only), Event Viewer, Services, Shared Folders, Task Scheduler in one console'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_disk_management";Cat="Admin Consoles";D=$false;L='Open Disk Management (Connected to Target)';Ds='mmc diskmgmt.msc /computer:\\<target> -- partitions, volumes, drive letters, extend/shrink'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_device_manager";Cat="Admin Consoles";D=$false;L='Open Device Manager (Connected to Target, Read-Only on Win8+)';Ds='mmc devmgmt.msc /computer:\\<target> -- Windows 8 / Server 2012 and later only let you VIEW remote devices; use Remote Desktop to change drivers'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_services";Cat="Admin Consoles";D=$false;L='Open Services Console (Connected to Target)';Ds='mmc services.msc /computer:\\<target> -- start/stop/configure services on the target'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_event_viewer";Cat="Admin Consoles";D=$false;L='Open Event Viewer (Connected to Target)';Ds='mmc eventvwr.msc /computer:<target> -- browse the target''s Windows logs'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_shared_folders";Cat="Admin Consoles";D=$false;L='Open Shared Folders Console (Connected to Target)';Ds='mmc fsmgmt.msc /computer:\\<target> -- shares, open sessions, open files'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_admin_share";Cat="Admin Consoles";D=$false;L='Open C$ Admin Share in File Explorer';Ds='explorer \\<target>\C$ -- browse the target''s system drive using the supplied admin credentials'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_firewall";Cat="Admin Consoles";D=$false;L='Open Windows Firewall with Advanced Security (Guided)';Ds='wf.msc has no remote switch -- opens the console and tells you the 3 clicks to connect it to the target'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_remote_shell";Cat="Admin Consoles";D=$false;L='Open Remote PowerShell Window on Target (Enter-PSSession)';Ds='New PowerShell window already connected to the target -- run any admin command (cleanmgr /sagerun, defrag, netsh, ...) there'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_remote_cmd";Cat="Admin Consoles";D=$false;L='Open Remote Command Prompt on Target (winrs)';Ds='New cmd window running on the target through WinRM (winrs) -- asks for the password in that window'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="ac_open_rdp";Cat="Admin Consoles";D=$false;L='Open Remote Desktop to Target (Credentials Pre-Loaded)';Ds='mstsc /v:<target> with the supplied credentials stored -- the only way to use GUI-only tools remotely: Device Manager (full), Disk Cleanup, Defrag, Firewall, Network Connections'
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (Open-AdminConsole) -- never sent to the target.
+   Write-Output "  (local console launcher)"
+   } }
+ @{Id="np_static_ip";Cat='Network Push';D=$true;P=$true;L='Push: Set Static IP (no wait)';Ds='Sends IP + mask + gateway + DNS1/DNS2 in ONE pass, then returns immediately: ''Static IP set cmd pushed to the target machine''. Use Ping Host to watch the change.'
+   Prm=@(
+     @{Key="ADAPTER";Kind="adaptername";Label='Adapter Name';Req=$true;Def='Ethernet'},
+     @{Key="IP";Kind="ipv4";Label='IP Address';Req=$true;Help='e.g. 192.168.1.100'},
+     @{Key="MASK";Kind="subnetmask";Label='Subnet Mask (or CIDR, e.g. 24)';Req=$true;Def='255.255.255.0'},
+     @{Key="GATEWAY";Kind="ipv4";Label='Default Gateway';Req=$true;Help='e.g. 192.168.1.1'},
+     @{Key="DNS1";Kind="ipv4";Label='Primary DNS (optional)';Req=$false},
+     @{Key="DNS2";Kind="ipv4";Label='Secondary DNS (optional)';Req=$false}
+   )
+   Cmd={
+$ProgressPreference="SilentlyContinue"
+$adapterName = "{{ADAPTER}}"
+$ip = "{{IP}}"
+$mask = "{{MASK}}"
+$gw = "{{GATEWAY}}"
+$dns1 = "{{DNS1}}"
+$dns2 = "{{DNS2}}"
+
+$nic = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
+if (-not $nic) {
+    Write-Output "  Adapter '$adapterName' not found. Available adapters:"
+    Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
+    return
+}
+
+$prefix = 0
+foreach ($o in $mask.Split('.')) { $prefix += ([Convert]::ToString([int]$o, 2).ToCharArray() | Where-Object { $_ -eq '1' }).Count }
+
+function Get-Missing {
+    $m = @()
+    $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $ip } | Select-Object -First 1
+    if (-not $a) { $m += 'IP address' }
+    elseif ($a.PrefixLength -ne $prefix) { $m += 'subnet mask' }
+    $c = Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue
+    if (-not (@($c.IPv4DefaultGateway.NextHop) -contains $gw)) { $m += 'default gateway' }
+    $d = @((Get-DnsClientServerAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
+    if ($dns1 -and $d[0] -ne $dns1) { $m += 'primary DNS' }
+    if ($dns2 -and $d[1] -ne $dns2) { $m += 'secondary DNS' }
+    return $m
+}
+
+function Set-AllAtOnce {
+    # IP + mask + gateway + DNS are pushed back-to-back in ONE pass (no output handling,
+    # no waiting between them) so the connection drop cannot leave a half-applied setup.
+    $o1 = netsh interface ipv4 set address name="$adapterName" static $ip $mask $gw 2>&1
+    $o2 = $null
+    $o3 = $null
+    if ($dns1) { $o2 = netsh interface ipv4 set dnsservers name="$adapterName" static $dns1 primary validate=no 2>&1 }
+    if ($dns2) { $o3 = netsh interface ipv4 add dnsservers name="$adapterName" $dns2 index=2 validate=no 2>&1 }
+    foreach ($x in @($o1) + @($o2) + @($o3)) { if ("$x".Trim()) { Write-Output "  $x" } }
+}
+
+Write-Output "  PUSH: $ip / $mask (/$prefix), gateway $gw, DNS $dns1 $dns2 on '$adapterName' -- everything in one pass"
+Set-AllAtOnce
+if (Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue) {
+    # From here on this only checks and repairs, on the target itself -- it keeps running
+    # even if the admin PC has already lost the connection.
+    $attempt = 1
+    while ($true) {
+        $until = (Get-Date).AddSeconds(12)
+        do {
+            Start-Sleep -Seconds 2
+            $missing = @(Get-Missing)
+        } while ($missing.Count -gt 0 -and (Get-Date) -lt $until)
+        if ($missing.Count -eq 0 -or $attempt -ge 3) { break }
+        $attempt++
+        Write-Output "  Not applied yet: $($missing -join ', ') -- pushing again (attempt $attempt of 3)..."
+        Set-AllAtOnce
+    }
+    if ($missing.Count -eq 0) { Write-Output "  VERIFIED on the target: IP address, subnet mask, gateway and DNS match." }
+    else { Write-Output "  WARNING: still not applied after $attempt attempts: $($missing -join ', ')" }
+}
+Write-Output "  === RESULTING CONFIGURATION ==="
+Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
+    Write-Output "  Gateway      : $($_.IPv4DefaultGateway.NextHop)"
+    Write-Output "  DNS Servers  : $($_.DNSServer.ServerAddresses -join ', ')"
+}
+   } }
+ @{Id="np_dhcp";Cat='Network Push';D=$true;P=$true;L='Push: Set DHCP (no wait)';Ds='Switches the adapter to DHCP and returns immediately: ''DHCP set cmd pushed to the target machine''. Use Ping Host to watch the new address appear.'
+   Prm=@(
+     @{Key="ADAPTER";Kind="adaptername";Label='Adapter Name';Req=$true;Def='Ethernet'}
+   )
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   $adapterName = "{{ADAPTER}}"
+   $nic = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
+   if (-not $nic) {
+       Write-Output "  Adapter '$adapterName' not found. Available adapters:"
+       Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
+       return
+   }
+   Write-Output "  Switching '$adapterName' to DHCP (address + DNS together)..."
+   $o1 = netsh interface ipv4 set address name="$adapterName" source=dhcp 2>&1
+   $o2 = netsh interface ipv4 set dnsservers name="$adapterName" source=dhcp 2>&1
+   foreach ($x in @($o1) + @($o2)) { if ("$x".Trim()) { Write-Output "  $x" } }
+   ipconfig /renew "$adapterName" | Out-Null
+   if (Get-Command Get-NetIPInterface -ErrorAction SilentlyContinue) {
+       $until = (Get-Date).AddSeconds(25)
+       $ok = $false
+       do {
+           Start-Sleep -Seconds 2
+           $i = Get-NetIPInterface -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue
+           $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1
+           if ($i -and $i.Dhcp -eq 'Enabled' -and $a) { $ok = $true }
+       } while (-not $ok -and (Get-Date) -lt $until)
+       if ($ok) { Write-Output "  VERIFIED: DHCP is enabled and a lease was obtained ($($a.IPAddress))." }
+       else { Write-Output "  WARNING: DHCP is set, but no lease was obtained within 25 s (no DHCP server reachable yet?)." }
+   }
+   Write-Output "  === RESULTING CONFIGURATION ==="
+   Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
+       Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
+       Write-Output "  Gateway      : $($_.IPv4DefaultGateway.NextHop)"
+       Write-Output "  DNS Servers  : $($_.DNSServer.ServerAddresses -join ', ')"
+   }
+   } }
+ @{Id="np_flush_dns";Cat='Network Push';D=$true;P=$true;L='Push: Flush DNS (no wait)';Ds='Clears the DNS cache + re-registers and returns immediately: ''Flush DNS cmd pushed to the target machine''.'
+   Cmd={
+     $ProgressPreference="SilentlyContinue"
+     Write-Output "  SAFE FLUSH -- local DNS cache only"
+     $b=@(Get-DnsClientCache -EA SilentlyContinue).Count
+     Write-Output "  Entries before: $b"
+     Clear-DnsClientCache -EA SilentlyContinue
+     ipconfig /flushdns 2>&1|Out-Null;ipconfig /registerdns 2>&1|Out-Null
+     $a=@(Get-DnsClientCache -EA SilentlyContinue).Count
+     Write-Output "  Entries after: $a"
+     $gw=(Get-NetIPConfiguration -EA SilentlyContinue|Where-Object{$_.IPv4DefaultGateway}|Select-Object -First 1).IPv4DefaultGateway.NextHop
+     if($gw){
+       $pg=Test-NetConnection $gw -WarningAction SilentlyContinue -EA SilentlyContinue
+       $gwStatus="check connectivity"
+       if($pg.PingSucceeded){$gwStatus="REACHABLE"}
+       Write-Output "  Gateway $gw : $gwStatus"
+     }
+     Write-Output "  DNS flushed safely -- domain connectivity preserved"
+   }
+ }
+ @{Id="np_reset_tcpip";Cat='Network Push';D=$true;P=$true;L='Push: Reset TCP/IP & Winsock (no wait)';Ds='Resets Winsock + TCP/IP and returns immediately: ''Reset TCP/IP cmd pushed to the target machine''. A restart is needed afterwards.'
+   Cmd={$ProgressPreference="SilentlyContinue"
+   Write-Output "  WARNING: REBOOT REQUIRED -- network WILL be interrupted"
+   netsh winsock reset 2>&1|Out-Null;Write-Output "  Winsock reset done"
+   netsh int ip reset 2>&1|Out-Null;netsh int ipv6 reset 2>&1|Out-Null;Write-Output "  TCP/IP reset done"
+   ipconfig /flushdns 2>&1|Out-Null;ipconfig /registerdns 2>&1|Out-Null
+   ipconfig /release 2>&1|Out-Null;Start-Sleep 2;ipconfig /renew 2>&1|Out-Null
+   Write-Output "  Network stack reset complete -- REBOOT REQUIRED" } }
+ @{Id="np_ping_host";Cat='Network Push';D=$false;MON=$true;L='Ping Host (continuous until Stop)';Ds='Pings the target (and its DNS answer, plus up to two extra IPs) every 2 s until you press STOP; prints every change and which IP is LIVE. Needs no WinRM login. Put it LAST in the run order.'
+   Prm=@(
+     @{Key="WATCH_IP1";Kind="ipv4";Label='Also watch this IP (optional, e.g. the NEW static IP)';Req=$false},
+     @{Key="WATCH_IP2";Kind="ipv4";Label='Also watch a 2nd IP (optional, e.g. the OLD IP)';Req=$false}
+   )
+   Cmd={
+   $ProgressPreference="SilentlyContinue"
+   # Handled by the host application (ping_monitor_gen) -- never sent to the target.
+   Write-Output "  (local ping monitor)"
+   } }
 )
 
 # ============================================================
@@ -1605,7 +2103,7 @@ function UpdCount {
 # FORM
 # ============================================================
 $F=New-Object System.Windows.Forms.Form
-$F.Text="PC Admin & Performance Tool  v3.6  --  (c) 2024-2026 Abdullah"
+$F.Text="PC Admin & Performance Tool  v3.8  --  (c) 2024-2026 Abdullah"
 $F.ClientSize=New-Object System.Drawing.Size(1380,860)
 $F.MinimumSize=New-Object System.Drawing.Size(1100,680)
 $F.BackColor=$BG;$F.StartPosition="CenterScreen"
@@ -1639,7 +2137,9 @@ foreach($td in @(
   @{L="Cleanup";K="Cleanup";Col=$CYAN},@{L="Disk";K="Disk";Col=$CYAN},
   @{L="Performance";K="Performance";Col=$CYAN},@{L="Windows Health";K="Windows Health";Col=$CYAN},
   @{L="Network";K="Network";Col=$CYAN},@{L="Power Recycle";K="Power Recycle";Col=$YEL},
-  @{L="Remote Tools";K="Remote Tools";Col=$CYAN})){
+  @{L="Remote Tools";K="Remote Tools";Col=$CYAN},
+  @{L="Admin Consoles";K="Admin Consoles";Col=$YEL},
+  @{L="Network Push";K="Network Push";Col=$YEL})){
     if($td.K -eq ""){$sep=New-Object System.Windows.Forms.Label;$sep.SetBounds($tx,8,2,24);$sep.BackColor=$BDR2;$PT.Controls.Add($sep);$tx+=8;continue}
     $tb=New-Object System.Windows.Forms.Button;$tb.Text=$td.L;$tb.Tag=$td.K;$tb.AutoSize=$true
     $tb.Left=$tx;$tb.Top=6;$tb.Height=28;$tb.FlatStyle="Flat"
@@ -1807,7 +2307,7 @@ $PL.Controls.Add($PC)
 # Task list header
 $PTH=New-Object System.Windows.Forms.Panel;$PTH.Dock="Top";$PTH.Height=22;$PTH.BackColor=$BG
 $lTH=New-Object System.Windows.Forms.Label
-$lTH.Text=" TROUBLESHOOTING & PERFORMANCE OPTIONS  (67 operations)"
+$lTH.Text=" TROUBLESHOOTING & PERFORMANCE OPTIONS  (85 operations)"
 $lTH.Dock="Fill";$lTH.ForeColor=$TXDD;$lTH.Font=GF "Segoe UI" 8 -B;$lTH.TextAlign="MiddleLeft"
 $PTH.Controls.Add($lTH);$PL.Controls.Add($PTH)
 
@@ -1979,6 +2479,58 @@ $BtnStop.Add_Click({$SH.Stop=$true;LogIt "  ! STOP requested -- finishing curren
 #  SystemRoot, like the other editions), high_perf (now prints the ACTUAL active
 #  power scheme afterwards instead of assuming success). The launcher
 #  (Run-AdminTool.bat) is also rewritten -- see the README.
+#   v3.8 (port 3038 -> 3039):
+#      CHG  FINAL v3.8 DESIGN (supersedes the "detached" approach for network tasks):
+#           Set Static IP / Set DHCP / Flush DNS / Reset TCP-IP / adapter restarts run
+#           INLINE again exactly like v3.6 (the method that worked). A dropped
+#           connection is reported as expected, the change is NOT repeated, the tool
+#           reconnects (also on the NEW IP) and prints the target's current IP/gateway/
+#           DNS. DISM / CHKDSK keep the detached engine.
+#      NEW  Category "Network Push": Push: Set Static IP / Set DHCP / Flush DNS /
+#           Reset TCP-IP (command is sent, the tool does not wait for the result:
+#           "<action> cmd pushed to the target machine") and "Ping Host" (continuous
+#           until Stop; shows which IP/name answers; needs no WinRM login).
+#           90 operations in total.
+#     FIX  "Set Static IP / Set DHCP / Flush DNS / Reset TCP/IP / adapter restart"
+#          stopped at once with
+#              PCAT_LAUNCH_FAIL:2
+#              Could not start the detached task on the target
+#          Root cause: the v3.7 detached-run engine started the background task
+#          with ONE method only -- Invoke-CimMethod Win32_Process.Create. Return
+#          code 2 is Windows "Access denied": on many targets that WMI call is
+#          refused when it is made from inside a WinRM session (network-logon
+#          token, security software, WMI/DCOM permissions), so the task never
+#          started and no report could be produced. Nothing else was tried.
+#          The launcher now tries FIVE methods in order and stops at the first
+#          that works; every one of them creates a process OUTSIDE the WinRM
+#          shell, so it still survives the network drop:
+#            1. one-shot Scheduled Task running as SYSTEM (Register-/Start-
+#               ScheduledTask) -- the most reliable from a remote session
+#            2. Win32_Process.Create via CIM          (the v3.7 method)
+#            3. Win32_Process.Create via WMI (Invoke-WmiMethod)
+#            4. schtasks.exe one-shot task as SYSTEM   (older Windows)
+#            5. hidden Start-Process                    (last resort)
+#          The log now says which method started the task ("Started on the target
+#          via: ..."). If ALL fail, the raw "PCAT_LAUNCH_FAIL:2" line is replaced
+#          by a readable report: one line per method with its decoded reason
+#          (return code 2 = Access denied, 3 = Insufficient privilege, ...), the
+#          account the target saw and whether it is an administrator, and the
+#          specific fix (non-admin / remote UAC -> LocalAccountTokenFilterPolicy;
+#          admin -> check Task Scheduler + WMI services, EDR, batch-logon policy).
+#          The scheduled task and the temporary files are removed after the task
+#          reports (cleanup also deletes the task). A launched marker now wins over
+#          the "ok" flag of the launch call, so a harmless stream warning cannot
+#          discard a task that did start. The task body runs as SYSTEM for methods
+#          1 and 4 (netsh / ipconfig / DISM / chkdsk are unaffected by this).
+#
+# v3.7: same functional changes as the Web edition's v3.7 entry, ported
+# 1:1 -- PC rename fixed on domain-joined targets (explicit domain credential
+# built inside the remote session, WMI fallback, decoded error codes), detached
+# run-and-reconnect for network-changing and very long tasks, reboot-class tasks
+# treated as expected, VSS storage resize, DISM RestoreHealth / component
+# cleanup, CIM replacements for WMIC, CHKDSK online scan, and the new
+# "Admin Consoles" category (85 operations in total). These consoles open on
+# THIS PC, connected to the target. See the Web edition's README.
 # ══════════════════════════════════════════════════════════════════════════
 function ConvertTo-DottedMask([int]$n) {
     $bits=("1"*$n).PadRight(32,"0")
@@ -2026,6 +2578,12 @@ function Test-ParamValue([string]$Kind,[string]$Raw) {
         "useraccount" {
             if($v -match '^(?:(?:\.|[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\)?[A-Za-z0-9_.-][A-Za-z0-9 _.-]{0,63}$' -or $v -match '^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9][A-Za-z0-9.-]{0,252}$'){return @{Ok=$true;Value=$v}}
             return @{Ok=$false;Err="'$v' is not a valid Windows account (use DOMAIN\username, username@domain.com or .\localuser)"} }
+        "vsssize" {
+            $z=($v.ToUpper() -replace ' ','')
+            if($z -match '^(UNBOUNDED|\d{1,3}%|\d{1,9}(KB|MB|GB|TB|PB|EB))$'){
+                if($z.EndsWith('%') -and ([int]$z.TrimEnd('%') -lt 1 -or [int]$z.TrimEnd('%') -gt 100)){return @{Ok=$false;Err="a percentage must be between 1% and 100%"}}
+                return @{Ok=$true;Value=$z}}
+            return @{Ok=$false;Err="'$v' is not a valid shadow-storage size (use e.g. 10%, 20GB, 51200MB or UNBOUNDED)"} }
         "bool" {
             $bl=$v.ToLower()
             if($bl -in @("true","1","yes","on")){return @{Ok=$true;Value='$true'}}
@@ -2127,6 +2685,7 @@ $BtnRun.Add_Click({
     # ── Collect + validate {{KEY}} parameters for any selected op that needs them ──
     $prmOps=$sel|Where-Object{$_.ContainsKey("Prm")}
     $subs=@{}    # Id -> final substituted command text
+    $vals=@{}
     if($prmOps.Count -gt 0){
         $vals=Show-ParamForm $prmOps
         if($null -eq $vals){return}   # user cancelled
@@ -2159,10 +2718,10 @@ $BtnRun.Add_Click({
     $Script:LblDot.ForeColor=$GRN;$Script:LblStat.Text="Connecting..."
     $od=$sel|ForEach-Object{
         $ctxt=if($subs.ContainsKey($_.Id)){$subs[$_.Id]}else{$_.Cmd.ToString()}
-        @{Id=$_.Id;L=$_.L;Cat=$_.Cat;Ds=$_.Ds;CT=$ctxt;D=$_.D}
+        @{Id=$_.Id;L=$_.L;Cat=$_.Cat;Ds=$_.Ds;CT=$ctxt;D=$_.D;NC=[bool]$_.NC;LG=[bool]$_.LG;P=[bool]$_.P;MON=[bool]$_.MON;PV=$vals[$_.Id]}
     }
     $SH.OD=$od;$SH.HN=$hn;$SH.UN=$un;$SH.PW=$pw;$SH.TR=$tr;$SH.LF=$Script:LogFile;$SH.CP=$COPY
-    $hdrs=@("="*55,"  PC ADMIN & PERFORMANCE TOOL  v3.6 -- PowerShell Edition","  $COPYL","="*55,
+    $hdrs=@("="*55,"  PC ADMIN & PERFORMANCE TOOL  v3.8 -- PowerShell Edition","  $COPYL","="*55,
        "  Target   : $hn","  Username : $un  [$tr]","  Date/Time: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")",
        "  Tasks    : $($sel.Count) selected","  Log File : $(Split-Path $Script:LogFile -Leaf)","="*55,"")
     foreach($hline in $hdrs){
@@ -2177,12 +2736,382 @@ $BtnRun.Add_Click({
     $Script:BgPS=[PowerShell]::Create();$Script:BgPS.Runspace=$Script:BgRS
     [void]$Script:BgPS.AddScript({
         $h=$sh;$ProgressPreference="SilentlyContinue";$WarningPreference="SilentlyContinue"
-        try{$sec=ConvertTo-SecureString $h.PW -AsPlainText -Force
+        $NETOPS=@("flush_dns","net_reset","rt_set_static_ip","rt_set_dhcp","pr_restart_all_adapters","pr_restart_named_adapter","pr_disable_enable_adapter")
+        $PUSHOPS=@("np_static_ip","np_dhcp","np_flush_dns","np_reset_tcpip")
+        $PUSHDROP=@("np_static_ip","np_dhcp","np_reset_tcpip")
+        $PUSHMSG=@{np_static_ip="Static IP set cmd pushed to the target machine";np_dhcp="DHCP set cmd pushed to the target machine";np_flush_dns="Flush DNS cmd pushed to the target machine";np_reset_tcpip="Reset TCP/IP cmd pushed to the target machine"}
+        $PUSHGRACE=8;$NETRECONN=10
+        $NETSTATUS='Get-NetIPConfiguration -EA SilentlyContinue | ForEach-Object { "  {0}: IPv4 {1} | Gateway {2} | DNS {3}" -f $_.InterfaceAlias, ($_.IPv4Address.IPAddress -join ","), ($_.IPv4DefaultGateway.NextHop -join ","), ($_.DNSServer.ServerAddresses -join ",") }'
+        $REBOOTOPS=@("pr_force_restart","pr_force_signout_restart","pr_full_soft_recycle","rt_rename_pc_domain","rt_rename_pc_workgroup")
+        $REBOOTMARK='restarts in 15 seconds|Restarting the computer now|Forcing an immediate restart|Signing out and restarting now'
+        $CONNRX='timed out|timeout|cannot connect|RPC server|WinRM client|interrupted|broken|connection.*(closed|lost)|network connection|terminated unexpectedly|disconnected|transport'
+        $CONSOLEOPS=@("rt_open_computer_management","ac_open_disk_management","ac_open_device_manager","ac_open_services","ac_open_event_viewer","ac_open_shared_folders","ac_open_admin_share","ac_open_firewall","ac_open_remote_shell","ac_open_remote_cmd","ac_open_rdp")
+        $fastOpts=New-PSSessionOption -OperationTimeout 20000 -OpenTimeout 10000 -NoMachineProfile
+$WRAPHEAD=@'
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$__base = $PSCommandPath -replace '\.ps1$',''
+$__o = $__base + '.out.txt'
+$__d = $__base + '.done.txt'
+try {
+  & {
+'@
+$WRAPTAIL=@'
+
+  } *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $__o -Encoding utf8
+} catch { ("ERROR: " + $_.Exception.Message) | Out-File -FilePath $__o -Append -Encoding utf8 }
+'done' | Out-File -FilePath $__d -Encoding ascii
+'@
+$LAUNCHTPL=@'
+$dir = Join-Path $env:windir 'Temp'
+$ps1 = Join-Path $dir 'pcat_@@TOK@@.ps1'
+[IO.File]::WriteAllBytes($ps1, [Convert]::FromBase64String('@@B64@@'))
+$tn  = 'PCAT_@@TOK@@'
+$exe = 'powershell.exe'
+$arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $ps1 + '"'
+$cl  = $exe + ' ' + $arg
+$ok  = $false
+$why = @()
+if (-not $ok) {
+  try {
+    $a = New-ScheduledTaskAction -Execute $exe -Argument $arg
+    $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4)
+    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Settings $s -Force -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $tn -ErrorAction Stop
+    Write-Output ('PCAT_LAUNCHED:schtask:' + $tn); $ok = $true
+  } catch {
+    $why += ('ScheduledTask(SYSTEM): ' + ($_.Exception.Message -replace '\s+', ' '))
+    try { Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+  }
+}
+if (-not $ok) {
+  try {
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cl } -ErrorAction Stop
+    if ($r.ReturnValue -eq 0) { Write-Output ('PCAT_LAUNCHED:cim:' + $r.ProcessId); $ok = $true }
+    else {
+      $cc = @{ 2 = 'Access denied'; 3 = 'Insufficient privilege'; 8 = 'Unknown failure'; 9 = 'Path not found'; 21 = 'Invalid parameter' }
+      $why += ('Win32_Process.Create(CIM): return code ' + $r.ReturnValue + ' (' + $cc[[int]$r.ReturnValue] + ')')
+    }
+  } catch { $why += ('Win32_Process.Create(CIM): ' + ($_.Exception.Message -replace '\s+', ' ')) }
+}
+if (-not $ok) {
+  try {
+    $r = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $cl -ErrorAction Stop
+    if ($r.ReturnValue -eq 0) { Write-Output ('PCAT_LAUNCHED:wmi:' + $r.ProcessId); $ok = $true }
+    else { $why += ('Win32_Process.Create(WMI): return code ' + $r.ReturnValue) }
+  } catch { $why += ('Win32_Process.Create(WMI): ' + ($_.Exception.Message -replace '\s+', ' ')) }
+}
+if (-not $ok) {
+  try {
+    if ($ps1 -match '\s') { $tr = $exe + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"' + $ps1 + '\"' }
+    else { $tr = $exe + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + $ps1 }
+    $o1 = & schtasks.exe /Create /TN $tn /TR $tr /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('create failed (' + $LASTEXITCODE + '): ' + $o1) }
+    $o2 = & schtasks.exe /Run /TN $tn 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('run failed (' + $LASTEXITCODE + '): ' + $o2) }
+    Write-Output ('PCAT_LAUNCHED:schtasks:' + $tn); $ok = $true
+  } catch {
+    $why += ('schtasks.exe: ' + ($_.Exception.Message -replace '\s+', ' '))
+    try { & schtasks.exe /Delete /TN $tn /F 2>&1 | Out-Null } catch {}
+  }
+}
+if (-not $ok) {
+  try {
+    $pr = Start-Process -FilePath $exe -ArgumentList $arg -WindowStyle Hidden -PassThru -ErrorAction Stop
+    Write-Output ('PCAT_LAUNCHED:startprocess:' + $pr.Id); $ok = $true
+  } catch { $why += ('Start-Process: ' + ($_.Exception.Message -replace '\s+', ' ')) }
+}
+if (-not $ok) {
+  $who = ''; $adm = ''
+  try {
+    $wi = [Security.Principal.WindowsIdentity]::GetCurrent(); $who = $wi.Name
+    $adm = ([Security.Principal.WindowsPrincipal]$wi).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch {}
+  Remove-Item $ps1 -Force -ErrorAction SilentlyContinue
+  Write-Output ('PCAT_LAUNCH_FAIL:' + ($why -join ' | ') + ' || account=' + $who + ' admin=' + $adm)
+}
+'@
+$POLLTPL=@'
+$b = Join-Path (Join-Path $env:windir 'Temp') 'pcat_@@TOK@@'
+if (Test-Path ($b + '.done.txt')) {
+  if (Test-Path ($b + '.out.txt')) { Get-Content ($b + '.out.txt') -Raw -Encoding UTF8 }
+  Write-Output 'PCAT_DONE'
+} else { Write-Output 'PCAT_PENDING' }
+'@
+$CLEANTPL=@'
+$b = Join-Path (Join-Path $env:windir 'Temp') 'pcat_@@TOK@@'
+try { Unregister-ScheduledTask -TaskName 'PCAT_@@TOK@@' -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+try { & schtasks.exe /Delete /TN 'PCAT_@@TOK@@' /F 2>&1 | Out-Null } catch {}
+Remove-Item ($b + '.*') -Force -ErrorAction SilentlyContinue
+'@
+        $onlyLocal=-not @($h.OD|Where-Object{-not ($_.MON -or ($CONSOLEOPS -contains $_.Id))}).Count
+        $sess=$null
+        if($onlyLocal){$h.Q.Enqueue(@{T="  No WinRM login needed for the selected task(s).";Tag="info"})}
+        if(-not $onlyLocal){try{$sec=ConvertTo-SecureString $h.PW -AsPlainText -Force
           $cred=New-Object System.Management.Automation.PSCredential($h.UN,$sec)
           $opts=New-PSSessionOption -OperationTimeout 170000 -OpenTimeout 30000 -NoMachineProfile
           $sess=New-PSSession -ComputerName $h.HN -Credential $cred -Authentication $h.TR -SessionOption $opts -EA Stop
           $h.Q.Enqueue(@{T="  Session ready -- $($h.HN)";Tag="ok"});$h.Q.Enqueue(@{T="";Tag="dim"})
-        }catch{$h.Q.Enqueue(@{T="  CONNECT FAILED: $($_.Exception.Message)";Tag="err"});$h.Done=$true;return}
+        }catch{$h.Q.Enqueue(@{T="  CONNECT FAILED: $($_.Exception.Message)";Tag="err"});$h.Done=$true;return}}
+        function Add-OutLines($lines){
+            $cnt=0
+            foreach($line in $lines){$l="$line".TrimEnd();if(-not $l){continue};$cnt++
+                $lo=$l.ToLower()
+                $tag=if($lo -match "freed|cleared|complete|restarted|maintained|preserved|pass|ok"){"ok"}
+                     elseif($lo -match "warn|skip|not found|already|reboot|interrupt|cannot"){"warn"}
+                     elseif($lo -match "error|fail|denied|critical"){"err"}
+                     else{"out"}
+                $h.Q.Enqueue(@{T="    $l";Tag=$tag})}
+            if($cnt -eq 0){$h.Q.Enqueue(@{T="    ! No output -- check permissions or nothing to process";Tag="warn"})}
+        }
+        function Get-NewSession([string]$hn,$o){
+            New-PSSession -ComputerName $hn -Credential $cred -Authentication $h.TR -SessionOption $o -EA Stop
+        }
+        function Reconnect-Normal([string[]]$hosts){
+            for($n=1;$n -le 8;$n++){
+                if($h.Stop){return $null}
+                foreach($hn in $hosts){
+                    try{
+                        $s=Get-NewSession $hn $opts
+                        $t=Invoke-Command -Session $s -ScriptBlock{"RECONNECTED"} -EA Stop
+                        if($t -eq "RECONNECTED"){return @{S=$s;H=$hn}}
+                    }catch{
+                        if("$($_.Exception.Message)" -match "Access is denied|logon failure|user name or password"){return $null}
+                    }
+                }
+                $h.Q.Enqueue(@{T="    Waiting for the target to come back... attempt $n/8";Tag="dim"})
+                Start-Sleep -Seconds 4
+            }
+            return $null
+        }
+        function Get-LaunchFailLines([string]$out){
+            $d=($out -split 'PCAT_LAUNCH_FAIL:',2)[1];if(-not $d){$d=$out};$d=$d.Trim()
+            $parts=$d -split ' \|\| ',2
+            $L=New-Object System.Collections.ArrayList
+            [void]$L.Add("  Could not start the task on the target -- every launch method failed:")
+            foreach($m in ($parts[0] -split ' \| ')){if($m.Trim()){[void]$L.Add("    - "+$m.Trim())}}
+            $acct="";if($parts.Count -gt 1){$acct=$parts[1]}
+            $adminFalse=($acct -match 'admin=False')
+            if($acct.Trim()){
+                $who="?";if($acct -match 'account=(.*?)\s+admin='){$who=$Matches[1].Trim()}
+                $yn="yes";if($adminFalse){$yn="NO"}
+                [void]$L.Add("  Signed in on the target as: $who  (administrator: $yn)")
+            }
+            if($adminFalse){
+                [void]$L.Add("  Cause: this account is NOT an administrator on the target (or Windows remote UAC is filtering its token).")
+                [void]$L.Add("  Fix  : use a Domain Admin / local administrator account. For a local admin that is not the built-in")
+                [void]$L.Add("         'Administrator', run on the target once:")
+                [void]$L.Add("         reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f")
+            }else{
+                [void]$L.Add("  The account is an administrator, but Windows refused every way of starting a process outside the WinRM session.")
+                [void]$L.Add("  Check on the target: the 'Task Scheduler' and 'Windows Management Instrumentation' services are running;")
+                [void]$L.Add("  security software (EDR/antivirus) is not blocking task/WMI process creation; Group Policy does not")
+                [void]$L.Add("  deny 'Log on as a batch job' to SYSTEM.")
+            }
+            return $L.ToArray()
+        }
+        function Test-AliveMany([string[]]$hs){
+            $res=@{};$pings=@{};$tcps=@{}
+            foreach($x in $hs){
+                $pings[$x]=$null;$tcps[$x]=@()
+                try{$pings[$x]=(New-Object System.Net.NetworkInformation.Ping).SendPingAsync($x,2000)}catch{}
+                foreach($pt in 5985,5986){try{$tc=New-Object System.Net.Sockets.TcpClient;$tcps[$x]+=@{C=$tc;A=$tc.BeginConnect($x,$pt,$null,$null)}}catch{}}
+            }
+            Start-Sleep -Milliseconds 2200
+            foreach($x in $hs){
+                $ok=$false
+                try{$p=$pings[$x];if($p -and $p.IsCompleted -and -not $p.IsFaulted -and $p.Result.Status -eq 'Success'){$ok=$true}}catch{}
+                foreach($t in $tcps[$x]){try{if($t.A.IsCompleted -and $t.C.Connected){$ok=$true}}catch{};try{$t.C.Close()}catch{}}
+                $res[$x]=$ok
+            }
+            return $res
+        }
+        function Get-HostIdent([string]$hn){
+            $ip=$null;$nm=$null
+            try{
+                if($hn -match '^\d{1,3}(\.\d{1,3}){3}$'){$ip=$hn;try{$e=[System.Net.Dns]::GetHostEntry($hn).HostName;if($e -and $e -ne $hn){$nm=$e}}catch{}}
+                else{$nm=$hn;try{$a=[System.Net.Dns]::GetHostAddresses($hn)|Where-Object{$_.AddressFamily -eq 'InterNetwork'}|Select-Object -First 1;if($a){$ip=$a.IPAddressToString}}catch{}}
+            }catch{}
+            return @{Ip=$ip;Name=$nm}
+        }
+        function Get-PingDetail([string[]]$hs){
+            $res=@{};$pings=@{};$tcps=@{}
+            foreach($x in $hs){
+                $pings[$x]=$null;$tcps[$x]=@()
+                try{$pings[$x]=(New-Object System.Net.NetworkInformation.Ping).SendPingAsync($x,2000)}catch{}
+                foreach($pt in 5985,5986){try{$tc=New-Object System.Net.Sockets.TcpClient;$tcps[$x]+=@{C=$tc;A=$tc.BeginConnect($x,$pt,$null,$null)}}catch{}}
+            }
+            Start-Sleep -Milliseconds 2200
+            foreach($x in $hs){
+                $pg=$false;$rtt=$null;$ttl=$null;$wr=$false
+                try{$p=$pings[$x];if($p -and $p.IsCompleted -and -not $p.IsFaulted -and $p.Result.Status -eq 'Success'){$pg=$true;$rtt=$p.Result.RoundtripTime;try{$ttl=$p.Result.Options.Ttl}catch{}}}catch{}
+                foreach($t in $tcps[$x]){try{if($t.A.IsCompleted -and $t.C.Connected){$wr=$true}}catch{};try{$t.C.Close()}catch{}}
+                $res[$x]=@{Ping=$pg;Rtt=$rtt;Ttl=$ttl;Winrm=$wr}
+            }
+            return $res
+        }
+        function Find-Target($ident,[string[]]$newIps){
+            $cands=@()
+            foreach($x in @($ident.Ip,$ident.Name)){if($x -and ($cands -notcontains $x)){$cands+=$x}}
+            $nm=$ident.Name
+            if($nm -and $nm -notmatch '^\d{1,3}(\.\d{1,3}){3}$'){
+                try{$f=[System.Net.Dns]::GetHostAddresses($nm)|Where-Object{$_.AddressFamily -eq 'InterNetwork'}|Select-Object -First 1;if($f -and ($cands -notcontains $f.IPAddressToString)){$cands+=$f.IPAddressToString}}catch{}
+            }
+            if($h.Stop){return $null}
+            $h.Q.Enqueue(@{T="    Checking the old address and the host name in parallel: $($cands -join ', ') ...";Tag="dim"})
+            $pr=Test-AliveMany $cands
+            $alive=@($cands|Where-Object{$pr[$_]})
+            if($alive.Count -gt 0){$h.Q.Enqueue(@{T="    Answering: $($alive -join ', ')";Tag="dim"})}
+            elseif($newIps.Count -gt 0){
+                $h.Q.Enqueue(@{T="    Neither the old address nor the host name answers -- checking the NEW IP: $($newIps -join ', ') ...";Tag="dim"})
+                $pn=Test-AliveMany $newIps
+                $alive=@($newIps|Where-Object{$pn[$_]})
+                if($alive.Count -gt 0){
+                    $h.NewAlive=$alive[0]
+                    $h.Q.Enqueue(@{T="    The new IP answers: $($alive -join ', ')";Tag="ok"})
+                    if($nm){
+                        $h.Q.Enqueue(@{T="    Now checking the host name $nm ...";Tag="dim"})
+                        $pm=Test-AliveMany @($nm)
+                        if($pm[$nm]){$h.Q.Enqueue(@{T="    The host name $nm answers as well.";Tag="ok"});if($alive -notcontains $nm){$alive+=$nm}}
+                        else{$h.Q.Enqueue(@{T="    The host name $nm does not answer yet (DNS can need a few minutes) -- using the new IP.";Tag="warn"})}
+                    }
+                }
+            }
+            foreach($hn in $alive){
+                try{
+                    $s=Get-NewSession $hn $fastOpts
+                    $t=Invoke-Command -Session $s -ScriptBlock{"RECONNECTED"} -EA Stop
+                    if($t -eq "RECONNECTED"){return @{S=$s;H=$hn}}
+                }catch{
+                    if("$($_.Exception.Message)" -match "Access is denied|logon failure|user name or password"){return $null}
+                }
+            }
+            if($alive.Count -gt 0){$h.Q.Enqueue(@{T="    It answers ping / the WinRM port, but WinRM is not ready yet -- retrying...";Tag="dim"})}
+            else{$h.Q.Enqueue(@{T="    No answer yet -- waiting for the target to come back...";Tag="dim"})}
+            return $null
+        }
+        function Invoke-Detached([string]$body,[string[]]$hosts,[int]$maxWait,$sess0){
+            $tok=([guid]::NewGuid().ToString('N')).Substring(0,12)
+            $wrapper=$WRAPHEAD+"`n"+$body+$WRAPTAIL
+            $b64=[Convert]::ToBase64String(([byte[]](0xEF,0xBB,0xBF))+[Text.Encoding]::UTF8.GetBytes($wrapper))
+            $curHost=$hosts[0]
+            $newIps=@($hosts|Select-Object -Skip 1|Where-Object{$_})
+            $ident=Get-HostIdent $curHost
+            $h.NewAlive=$null
+            try{
+                $lo=Invoke-Command -Session $sess0 -ScriptBlock ([scriptblock]::Create($LAUNCHTPL.Replace('@@TOK@@',$tok).Replace('@@B64@@',$b64))) -EA Stop
+            }catch{return @{Ok=$false;Lines=@("  Could not start the detached task: $($_.Exception.Message)");Host=$curHost}}
+            $lo=(@($lo|ForEach-Object{"$_"}) -join "`n")
+            if($lo -notmatch 'PCAT_LAUNCHED'){
+                if($lo -match 'PCAT_LAUNCH_FAIL'){return @{Ok=$false;Lines=@(Get-LaunchFailLines $lo);Host=$curHost}}
+                return @{Ok=$false;Lines=@("  Could not start the detached task on the target: $lo");Host=$curHost}
+            }
+            if($lo -match 'PCAT_LAUNCHED:(\w+)'){
+                $mk=$Matches[1]
+                $mn=@{schtask="one-shot scheduled task running as SYSTEM";cim="Win32_Process.Create (CIM)";wmi="Win32_Process.Create (WMI)";schtasks="schtasks.exe one-shot task running as SYSTEM";startprocess="hidden Start-Process (last resort)"}[$mk]
+                if(-not $mn){$mn=$mk}
+                $h.Q.Enqueue(@{T="    Started on the target via: $mn";Tag="dim"})
+            }
+            $start=Get-Date;$deadline=$start.AddSeconds($maxWait);$lastNote=$start;$interrupted=$false
+            $pollSb=[scriptblock]::Create($POLLTPL.Replace('@@TOK@@',$tok))
+            $ps=$null
+            while((Get-Date) -lt $deadline){
+                if($h.Stop){return @{Ok=$false;Lines=@("  STOPPED: the task keeps running on the target (file pcat_$tok in %windir%\Temp)");Host=$curHost}}
+                if(-not $ps -or $ps.State -ne 'Opened'){
+                    $ps=$null
+                    try{$ps=Get-NewSession $curHost $fastOpts}catch{$ps=$null}
+                    if(-not $ps){
+                        if(-not $interrupted){$interrupted=$true;$h.Q.Enqueue(@{T="    Connection to the target interrupted (expected for network changes) -- reconnecting...";Tag="warn"})}
+                        $sr=Find-Target $ident $newIps
+                        if($sr){$ps=$sr.S;$curHost=$sr.H}else{Start-Sleep -Seconds 3;continue}
+                    }
+                    if($interrupted){$h.Q.Enqueue(@{T="    Reconnected to $curHost.";Tag="ok"});$interrupted=$false}
+                }
+                try{
+                    $o=Invoke-Command -Session $ps -ScriptBlock $pollSb -EA Stop
+                    $txt=(($o|ForEach-Object{"$_"}) -join "`n").TrimEnd()
+                    if($txt.EndsWith('PCAT_DONE')){
+                        $res=$txt.Substring(0,$txt.Length-9)
+                        try{Invoke-Command -Session $ps -ScriptBlock ([scriptblock]::Create($CLEANTPL.Replace('@@TOK@@',$tok))) -EA SilentlyContinue|Out-Null}catch{}
+                        try{Remove-PSSession $ps -EA SilentlyContinue}catch{}
+                        return @{Ok=$true;Lines=($res -split "`r?`n");Host=$curHost}
+                    }
+                    if(((Get-Date)-$lastNote).TotalSeconds -ge 30){$lastNote=Get-Date;$h.Q.Enqueue(@{T="    ...still running on the target ($([int]((Get-Date)-$start).TotalSeconds)s)";Tag="dim"})}
+                    Start-Sleep -Seconds 3
+                }catch{
+                    if(-not $interrupted){$interrupted=$true;$h.Q.Enqueue(@{T="    Connection to the target interrupted (expected for network changes) -- reconnecting...";Tag="warn"})}
+                    try{Remove-PSSession $ps -EA SilentlyContinue}catch{}
+                    $ps=$null;Start-Sleep -Seconds 2
+                }
+            }
+            if($h.NewAlive -and $newIps.Count -gt 0){
+                return @{Ok=$true;Lines=@("  The NEW IP $($h.NewAlive) answers (ping / WinRM port) and the old address no longer does -- the new address is active.","  The change was applied. The detailed result could not be read back over WinRM (it may still be starting up).","  Reconnect to the NEW address $($h.NewAlive).");Host=$h.NewAlive}
+            }
+            return @{Ok=$false;Lines=@("  The target did not report completion within $maxWait s.","  The change was started on the target and has most likely been applied.","  If you changed the IP address and connected by IP, reconnect to the NEW address.");Host=$curHost}
+        }
+        function Open-AdminConsole([string]$id,[string]$hn,[string]$un,[string]$pw,[string]$tr){
+            $m=New-Object System.Collections.ArrayList
+            if($hn -notmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,253}$'){return @("Refused: '$hn' is not a plain hostname/IP (letters, digits, . : - _ only).")}
+            if($un -match '[\x00-\x1f]'){return @("Refused: the username contains control characters.")}
+            $mmcTable=@{
+                "rt_open_computer_management"=@("compmgmt.msc",('\\'+$hn));"ac_open_disk_management"=@("diskmgmt.msc",('\\'+$hn))
+                "ac_open_device_manager"=@("devmgmt.msc",('\\'+$hn));"ac_open_services"=@("services.msc",('\\'+$hn))
+                "ac_open_event_viewer"=@("eventvwr.msc",$hn);"ac_open_shared_folders"=@("fsmgmt.msc",('\\'+$hn))}
+            $needIpc=$mmcTable.ContainsKey($id) -or $id -in @("ac_open_admin_share","ac_open_firewall")
+            try{
+                if($needIpc){
+                    $r=& net.exe use ('\\'+$hn+'\IPC$') "/user:$un" $pw /persistent:no 2>&1 | Out-String
+                    if($LASTEXITCODE -eq 0){[void]$m.Add("Authenticated to $hn as $un (net use IPC`$).")}
+                    else{
+                        $r=($r -replace [regex]::Escape($pw),'********').Trim() -replace "\s+"," "
+                        if($r -match "1219"){[void]$m.Add("Windows already holds a connection to $hn under a different account (error 1219). Run  net use \\$hn\IPC`$ /delete  then try again. Detail: $r")}
+                        else{[void]$m.Add("Authentication to $hn failed: $r")}
+                    }
+                }
+                if($mmcTable.ContainsKey($id)){
+                    $snap=$mmcTable[$id][0];$arg="/computer:"+$mmcTable[$id][1]
+                    Start-Process -FilePath "mmc.exe" -ArgumentList $snap,$arg -EA Stop
+                    [void]$m.Add("Launched: mmc.exe $snap $arg")
+                    [void]$m.Add("If the console shows the LOCAL computer instead, right-click its root node > Connect to another computer > $hn.")
+                    if($id -eq "ac_open_device_manager"){[void]$m.Add("Windows 8 / Server 2012 and later show remote devices read-only. For driver changes use 'Open Remote Desktop'.")}
+                }elseif($id -eq "ac_open_admin_share"){
+                    Start-Process -FilePath "explorer.exe" -ArgumentList ('\\'+$hn+'\C$') -EA Stop
+                    [void]$m.Add("Launched: explorer \\$hn\C`$")
+                }elseif($id -eq "ac_open_firewall"){
+                    Start-Process -FilePath "mmc.exe" -ArgumentList "wf.msc" -EA Stop
+                    [void]$m.Add("Launched Windows Firewall with Advanced Security (LOCAL view). To manage the TARGET:")
+                    [void]$m.Add("  1. Right-click 'Windows Defender Firewall with Advanced Security' (top-left node)")
+                    [void]$m.Add("  2. Choose 'Connect to Another Computer...'")
+                    [void]$m.Add("  3. Pick 'Another computer', type $hn, OK.")
+                    [void]$m.Add("(The target must allow 'Windows Defender Firewall Remote Management' inbound.)")
+                }elseif($id -eq "ac_open_remote_shell"){
+                    $auth=switch($tr){"Negotiate"{"Negotiate"}"Kerberos"{"Kerberos"}"Basic"{"Basic"}"Credssp"{"CredSSP"}default{"Negotiate"}}
+                    $uq=$un.Replace("'","''");$hq=$hn.Replace("'","''")
+                    $inner="`$u = '$uq'; `$sp = ConvertTo-SecureString `$env:PCAT_PW -AsPlainText -Force; Remove-Item Env:PCAT_PW; `$cred = New-Object System.Management.Automation.PSCredential(`$u, `$sp); Enter-PSSession -ComputerName '$hq' -Credential `$cred -Authentication $auth"
+                    $env:PCAT_PW=$pw
+                    try{Start-Process -FilePath "powershell.exe" -ArgumentList ('-NoExit -NoProfile -Command "'+$inner+'"') -EA Stop}finally{Remove-Item Env:PCAT_PW -EA SilentlyContinue}
+                    [void]$m.Add("Launched a PowerShell window connected to $hn ($auth).")
+                    [void]$m.Add("Inside it, run anything: cleanmgr /sagerun:1, defrag C: /U, netsh advfirewall show allprofiles, Get-NetAdapter ...")
+                    [void]$m.Add("If it says the host is not trusted: on THIS PC run (Admin)  Set-Item WSMan:\localhost\Client\TrustedHosts -Value '$hn' -Concatenate -Force")
+                }elseif($id -eq "ac_open_remote_cmd"){
+                    Start-Process -FilePath "cmd.exe" -ArgumentList ("/k winrs -r:$hn `"-u:$un`" cmd") -EA Stop
+                    [void]$m.Add("Launched: winrs -r:$hn -u:$un cmd  (new window).")
+                    [void]$m.Add("Type the password in that window when it asks -- winrs will not take it safely any other way.")
+                }elseif($id -eq "ac_open_rdp"){
+                    $r=& cmdkey.exe "/generic:TERMSRV/$hn" "/user:$un" "/pass:$pw" 2>&1 | Out-String
+                    if($LASTEXITCODE -eq 0){[void]$m.Add("Stored the credential for TERMSRV/$hn on this PC.")}
+                    else{[void]$m.Add("Could not store the credential: "+(($r -replace [regex]::Escape($pw),'********').Trim()))}
+                    Start-Process -FilePath "mstsc.exe" -ArgumentList "/v:$hn" -EA Stop
+                    [void]$m.Add("Launched: mstsc /v:$hn")
+                    [void]$m.Add("Inside the session you have EVERYTHING: devmgmt.msc, dfrgui, cleanmgr, wf.msc, ncpa.cpl, services.msc ...")
+                    [void]$m.Add("When finished, remove the stored credential:  cmdkey /delete:TERMSRV/$hn")
+                }
+            }catch{[void]$m.Add("Could not launch: $($_.Exception.Message)")}
+            return $m
+        }
+        $curHost=$h.HN;$rebooting=$false;$linkDropped=$false
         $tot=$h.OD.Count;$idx=0
         foreach($op in $h.OD){
             if($h.Stop){$h.Q.Enqueue(@{T="  ! STOPPED by user";Tag="warn"});break}
@@ -2194,47 +3123,170 @@ $BtnRun.Add_Click({
             $h.Q.Enqueue(@{T="    Category: $($op.Cat)  --  $($op.Ds)";Tag="dim"})
             $h.Q.Enqueue(@{T="    "+"-"*48;Tag="dim"})
 
-            if($op.Id -eq "rt_open_computer_management"){
-                try{
-                    Start-Process -FilePath "mmc.exe" -ArgumentList "compmgmt.msc","/computer:\\$($h.HN)" -EA Stop
-                    $h.Q.Enqueue(@{T="    Launched Computer Management locally, connected to \\$($h.HN)";Tag="ok"})
-                }catch{$h.Q.Enqueue(@{T="    Could not launch Computer Management: $($_.Exception.Message)";Tag="err"})}
+            if($rebooting){
+                $h.Q.Enqueue(@{T="    Skipped: the target is restarting -- run this task again once it is back online.";Tag="warn"})
                 $h.Q.Enqueue(@{T="";Tag="dim"})
                 continue
             }
-
-            $t0=Get-Date
-            try{
-                $sb=[scriptblock]::Create('$ProgressPreference="SilentlyContinue"'+"`n"+'$WarningPreference="SilentlyContinue"'+"`n"+'$OutputEncoding=[Text.Encoding]::UTF8'+"`n"+$op.CT)
-                $out=Invoke-Command -Session $sess -ScriptBlock $sb -EA Stop;$ok=$true
-                if($out){foreach($line in $out){$l="$line".TrimEnd();if(-not $l){continue}
-                    $lo=$l.ToLower()
-                    $tag=if($lo -match "freed|cleared|complete|restarted|maintained|preserved|pass|ok"){"ok"}
-                         elseif($lo -match "warn|skip|not found|already|reboot|interrupt|cannot"){"warn"}
-                         elseif($lo -match "error|fail|denied|critical"){"err"}
-                         else{"out"}
-                    $h.Q.Enqueue(@{T="    $l";Tag=$tag})}}
-                else{$h.Q.Enqueue(@{T="    ! No output -- check permissions or nothing to process";Tag="warn"})}
-            }catch{
-                $ok=$false;$em=$_.Exception.Message
-                if($em -match "#< CLIXML|<Objs|<T>Completed"){$h.Q.Enqueue(@{T="    (non-critical PowerShell diagnostic output suppressed)";Tag="warn"})}
-                elseif($em -match "AccessDenied|Access is denied"){$h.Q.Enqueue(@{T="    Access denied -- use Domain Admin account";Tag="err"})}
-                elseif($em -match "timed out|timeout|cannot connect|RPC server|WinRM client"){
-                    $h.Q.Enqueue(@{T="    Connection lost -- reconnecting...";Tag="warn"})
-                    try{Remove-PSSession $sess -EA SilentlyContinue
-                        $sess=New-PSSession -ComputerName $h.HN -Credential $cred -Authentication $h.TR -SessionOption $opts -EA Stop
-                        $rt=Invoke-Command -Session $sess -ScriptBlock{"RECONNECTED"} -EA Stop
-                        if($rt -eq "RECONNECTED"){$h.Q.Enqueue(@{T="    Session reconnected -- continuing";Tag="ok"})}
-                    }catch{$h.Q.Enqueue(@{T="    Reconnect failed: $($_.Exception.Message)";Tag="err"})}}
-                else{$h.Q.Enqueue(@{T="    Error: $em";Tag="err"})}
+            if($CONSOLEOPS -contains $op.Id){
+                foreach($cl in (Open-AdminConsole $op.Id $curHost $h.UN $h.PW $h.TR)){$h.Q.Enqueue(@{T="    $cl";Tag="out"})}
+                $h.Q.Enqueue(@{T="";Tag="dim"})
+                continue
             }
+            if($op.MON){
+                $watch=@()
+                if($op.PV){foreach($k in "WATCH_IP1","WATCH_IP2"){$wv="$($op.PV[$k])".Trim();if($wv -match '^\d{1,3}(\.\d{1,3}){3}$'){$watch+=$wv}}}
+                $h.Q.Enqueue(@{T=("    Pinging $curHost"+$(if($watch.Count){" + watching "+($watch -join ", ")}else{""})+" -- press STOP to end.");Tag="info"})
+                $lastSig=$null;$lastLive=$null;$rounds=0;$mstart=Get-Date
+                while(-not $h.Stop -and ((Get-Date)-$mstart).TotalSeconds -lt 21600){
+                    $rounds++
+                    $resolved=$null;$isIp=($curHost -match '^\d{1,3}(\.\d{1,3}){3}$')
+                    if(-not $isIp){$resolved=(Get-HostIdent $curHost).Ip}
+                    $targets=@($curHost);if($resolved){$targets+=$resolved};$targets+=$watch;$targets=@($targets|Select-Object -Unique)
+                    $det=Get-PingDetail $targets
+                    $live=@($targets|Where-Object{$_ -match '^\d{1,3}(\.\d{1,3}){3}$' -and ($det[$_].Ping -or $det[$_].Winrm)})
+                    $sig=("$resolved|"+(($targets|ForEach-Object{"$_=$($det[$_].Ping)/$($det[$_].Winrm)"}) -join ";"))
+                    $chg=($sig -ne $lastSig)
+                    if($chg -or ($rounds % 5 -eq 0)){
+                        $parts=@()
+                        if(-not $isIp){$parts+="$curHost resolves to "+$(if($resolved){$resolved}else{"NOTHING (DNS has no answer)"})}
+                        foreach($x in $targets){
+                            $d=$det[$x]
+                            if($d.Ping){$ex="";if($null -ne $d.Rtt){$ex+=" $($d.Rtt)ms"};if($null -ne $d.Ttl){$ex+=" TTL=$($d.Ttl)"};$s="${x}: PING OK$ex"}else{$s="${x}: no ping"}
+                            $s+=$(if($d.Winrm){", WinRM port open"}else{", WinRM port closed"})
+                            $parts+=$s
+                        }
+                        $anyUp=@($targets|Where-Object{$det[$_].Ping -or $det[$_].Winrm}).Count -gt 0
+                        $pfx=$(if($chg -and $null -ne $lastSig){"CHANGE "}else{""})
+                        $h.Q.Enqueue(@{T=("    [$(Get-Date -Format HH:mm:ss)] #$rounds $pfx"+($parts -join " | "));Tag=$(if($anyUp){"ok"}else{"err"})})
+                        $liveKey=($live -join ",")
+                        if($liveKey -ne $lastLive){
+                            if($live.Count){$h.Q.Enqueue(@{T="    LIVE IP now: "+($live -join ", ");Tag="info"})}
+                            else{$h.Q.Enqueue(@{T="    LIVE IP now: none -- the target is not answering";Tag="warn"})}
+                            $lastLive=$liveKey
+                        }
+                        $lastSig=$sig
+                    }
+                }
+                $h.Q.Enqueue(@{T="    Ping monitor stopped after $rounds round(s).";Tag="dim"})
+                $h.Q.Enqueue(@{T="";Tag="dim"})
+                continue
+            }
+            if($linkDropped){
+                $h.Q.Enqueue(@{T="    Skipped: a network change was pushed to the target, so the old connection is gone -- use 'Ping Host' to see when it answers, then run this task again.";Tag="warn"})
+                $h.Q.Enqueue(@{T="";Tag="dim"})
+                continue
+            }
+            $t0=Get-Date
+            $pushedFlag=$false
+            $ok=$true;$retried=$false;$outText=""
+            $preLines='$ProgressPreference="SilentlyContinue"'+"`n"+'$WarningPreference="SilentlyContinue"'+"`n"+'$OutputEncoding=[Text.Encoding]::UTF8'+"`n"
+            $expReboot=($op.Id -in @("pr_force_restart","pr_force_signout_restart")) -or ($op.Id -eq "pr_full_soft_recycle" -and "$($op.PV.AUTO_RESTART)".ToLower() -notin @("false","0","no","off"))
+            while($true){
+                try{
+                    if($PUSHOPS -contains $op.Id){
+                        # v3.8 Network Push: send the command, do not wait for the result.
+                        if(-not $sess -or $sess.State -ne 'Opened'){
+                            $rc=Reconnect-Normal @($curHost)
+                            if($rc){$sess=$rc.S}else{throw "Reconnect failed -- the target did not come back in time"}
+                        }
+                        $sbp=[scriptblock]::Create($preLines+$op.CT)
+                        $job=Invoke-Command -Session $sess -ScriptBlock $sbp -AsJob
+                        [void](Wait-Job $job -Timeout $PUSHGRACE)
+                        $pstate="pushed";$pout=@()
+                        if($job.State -eq 'Completed'){$pstate="done";$pout=@(Receive-Job $job -EA SilentlyContinue)}
+                        elseif($job.State -in @('Failed','Disconnected')){$pstate="pushed"}
+                        $pushedFlag=$true;$ok=$true
+                        $h.Q.Enqueue(@{T="    OK -- $($PUSHMSG[$op.Id])";Tag="ok"})
+                        if($pstate -eq "done"){Add-OutLines $pout;$h.Q.Enqueue(@{T="    (the target answered within a few seconds -- result above)";Tag="dim"})}
+                        else{$h.Q.Enqueue(@{T="    The command keeps running on the target; no result is awaited. Use 'Ping Host' to watch it.";Tag="out"})}
+                        $outText=($pout|ForEach-Object{"$_"}) -join "`n"
+                        if($PUSHDROP -contains $op.Id){$linkDropped=$true}
+                        if($pstate -ne "done"){$sess=$null}
+                    }elseif($op.LG){
+                        $alt=@()
+                        $h.Q.Enqueue(@{T="    Long-running task: running detached on the target; waiting for it to finish (no 170 s limit).";Tag="dim"})
+                        $mw=3600
+                        $res=Invoke-Detached ($preLines+$op.CT) (@($curHost)+$alt) $mw $sess
+                        $ok=$res.Ok;$outText=($res.Lines -join "`n");Add-OutLines $res.Lines
+                        if($res.Host -and $res.Host -ne $curHost){$curHost=$res.Host;$h.Q.Enqueue(@{T="    Target is now reached at $curHost.";Tag="info"})}
+                        try{Remove-PSSession $sess -EA SilentlyContinue}catch{}
+                        $sess=$null
+                        $rc=Reconnect-Normal @($curHost)
+                        if($rc){$sess=$rc.S}else{$h.Q.Enqueue(@{T="    Note: could not reopen the main session yet -- it will be retried before the next task.";Tag="warn"})}
+                    }else{
+                        if(-not $sess -or $sess.State -ne 'Opened'){
+                            $h.Q.Enqueue(@{T="    Session not open -- reconnecting...";Tag="warn"})
+                            $rc=Reconnect-Normal @($curHost)
+                            if($rc){$sess=$rc.S;$h.Q.Enqueue(@{T="    Session reconnected";Tag="ok"})}else{throw "Reconnect failed -- the target did not come back in time"}
+                        }
+                        if($op.NC){
+                            $sb=[scriptblock]::Create('param($__cred)'+"`n"+$preLines+$op.CT)
+                            $out=Invoke-Command -Session $sess -ScriptBlock $sb -ArgumentList $cred -EA Stop
+                        }else{
+                            $sb=[scriptblock]::Create($preLines+$op.CT)
+                            $out=Invoke-Command -Session $sess -ScriptBlock $sb -EA Stop
+                        }
+                        $ok=$true;$outText=(($out|ForEach-Object{"$_"}) -join "`n");Add-OutLines $out
+                    }
+                    break
+                }catch{
+                    $ok=$false;$em=$_.Exception.Message
+                    if($em -match "#< CLIXML|<Objs|<T>Completed"){$h.Q.Enqueue(@{T="    (non-critical PowerShell diagnostic output suppressed)";Tag="warn"});break}
+                    elseif($em -match "AccessDenied|Access is denied"){$h.Q.Enqueue(@{T="    Access denied -- use Domain Admin account";Tag="err"});break}
+                    elseif($em -match $CONNRX){
+                        if($expReboot){
+                            $h.Q.Enqueue(@{T="    Connection closed because the target is restarting -- this is the expected result.";Tag="ok"})
+                            $ok=$true;$rebooting=$true;$sess=$null;break
+                        }
+                        if($NETOPS -contains $op.Id){
+                            # v16 method: the drop is the expected effect of a network change -- do NOT retry
+                            # the change; reconnect and report what the target has now.
+                            $h.Q.Enqueue(@{T="    Connection dropped while the network changed -- this is expected. Checking the target...";Tag="warn"})
+                            $alt=@();if($op.Id -eq "rt_set_static_ip"){$nip="$($op.PV.IP)".Trim();if($nip -and $nip -ne $curHost){$alt+=$nip}}
+                            try{Remove-PSSession $sess -EA SilentlyContinue}catch{}
+                            $sess=$null
+                            $saveN=$null
+                            $rc=$null
+                            for($rn=1;$rn -le $NETRECONN -and -not $rc -and -not $h.Stop;$rn++){
+                                foreach($hh in (@($curHost)+$alt)){
+                                    try{$s9=Get-NewSession $hh $fastOpts;$t9=Invoke-Command -Session $s9 -ScriptBlock{"RECONNECTED"} -EA Stop;if($t9 -eq "RECONNECTED"){$rc=@{S=$s9;H=$hh};break}}catch{}
+                                }
+                                if(-not $rc){$h.Q.Enqueue(@{T="    Waiting for the target to come back... attempt $rn/$NETRECONN";Tag="dim"});Start-Sleep -Seconds 4}
+                            }
+                            if($rc){
+                                $sess=$rc.S;$curHost=$rc.H
+                                $h.Q.Enqueue(@{T="    The command was delivered; the connection dropped as expected.";Tag="out"})
+                                $h.Q.Enqueue(@{T="    Target answers again at $curHost. Current network status:";Tag="ok"})
+                                try{$so=Invoke-Command -Session $sess -ScriptBlock ([scriptblock]::Create($NETSTATUS)) -EA Stop;Add-OutLines $so}catch{}
+                                $ok=$true
+                            }else{
+                                $h.Q.Enqueue(@{T="    The command was delivered but the target has not answered yet. Use 'Ping Host' (Network Push) to watch it, then re-check.";Tag="warn"})
+                                $ok=$false
+                            }
+                            break
+                        }
+                        if(-not $retried){
+                            $retried=$true
+                            $h.Q.Enqueue(@{T="    Connection lost -- reconnecting...";Tag="warn"})
+                            try{Remove-PSSession $sess -EA SilentlyContinue}catch{}
+                            $rc=Reconnect-Normal @($curHost)
+                            if($rc){$sess=$rc.S;$h.Q.Enqueue(@{T="    Session reconnected -- retrying task";Tag="ok"});continue}
+                            $h.Q.Enqueue(@{T="    Reconnect failed -- the target did not come back in time";Tag="err"});$sess=$null;break
+                        }
+                        $h.Q.Enqueue(@{T="    Error: $em";Tag="err"});break
+                    }
+                    else{$h.Q.Enqueue(@{T="    Error: $em";Tag="err"});break}
+                }
+            }
+            if($ok -and ($REBOOTOPS -contains $op.Id) -and ($outText -match $REBOOTMARK)){$rebooting=$true}
             $el=[math]::Round(((Get-Date)-$t0).TotalSeconds,1)
             $doneTxt="Completed with errors";$doneTag="warn"
-            if($ok){$doneTxt="Completed";$doneTag="ok"}
+            if($ok){$doneTxt=$(if($pushedFlag){"Pushed"}else{"Completed"});$doneTag="ok"}
             $h.Q.Enqueue(@{T="    $doneTxt in ${el}s";Tag=$doneTag})
             $h.Q.Enqueue(@{T="";Tag="dim"})
         }
-        Remove-PSSession $sess -EA SilentlyContinue
+        try{Remove-PSSession $sess -EA SilentlyContinue}catch{}
         $h.Q.Enqueue(@{T="="*55;Tag="hdr"})
         $finalTxt="ALL TASKS COMPLETED";$finalTag="ok"
         if($h.Stop){$finalTxt="STOPPED BY USER";$finalTag="warn"}
@@ -2277,7 +3329,7 @@ $F.Add_Shown({
 
     $w=$PA.Width;$BtnLogs.Left=$w-104;$Script:LblCnt.Left=[math]::Max(640,$w-312)
     TabClk "all"
-    LogIt "  PC Admin & Performance Tool  v3.6 -- PowerShell GUI Edition" "hdr"
+    LogIt "  PC Admin & Performance Tool  v3.8 -- PowerShell GUI Edition" "hdr"
     LogIt "  $COPY" "dim";LogIt ("  "+"-"*50) "dim"
     LogIt "  $($Ops.Count) operations ready across $(@($Ops | ForEach-Object { $_.Cat } | Select-Object -Unique).Count) categories" "info"
     LogIt "  Enter Hostname/IP -- Test Connection -- Select tasks -- Perform" "dim"

@@ -106,7 +106,7 @@
 <body>
 <header>
   <h1>PC ADMIN &amp; PERFORMANCE TOOL</h1>
-  <span class="ver">v3.7 &middot; Web-Service Edition &middot; port 3038</span>
+  <span class="ver">v3.8 &middot; Web-Service Edition &middot; port 3030</span>
   <span class="cp">{{ copyright }}</span>
 </header>
 
@@ -192,7 +192,7 @@ const KIND_PATTERNS = {
   drive: /^[A-Za-z]:?$/,
   uncpath: /^\\\\[A-Za-z0-9][A-Za-z0-9._-]{0,200}(?:\\(?!\.+(?:\\|$))[A-Za-z0-9 _.$#@&+(),~-]{1,80}){1,30}$/,
   mapdrive: /^[D-Zd-z]:?$/,
-  vsssize: /^(?:UNBOUNDED|\d{1,3}%|\d{1,7}(?:MB|GB|TB))$/i,
+  vsssize: /^(UNBOUNDED|\d{1,3}%|\d{1,9}(KB|MB|GB|TB|PB|EB))$/i,
   useraccount: /^(?:(?:\.|[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\)?[A-Za-z0-9_.-][A-Za-z0-9 _.-]{0,63}$|^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/,
 };
 // Human-readable format per kind: shown in the "Fix these before running" popup and as the field tooltip.
@@ -208,11 +208,10 @@ const KIND_HINTS = {
   uncpath: 'a UNC path such as \\\\server\\share or \\\\server\\share\\folder (backslashes)',
   mapdrive: 'a drive letter D to Z (A, B and C are reserved)',
   useraccount: 'DOMAIN\\user, user@domain.com or .\\localuser',
-  vsssize: 'a size such as 10GB, 500MB (min 320MB), 20% or UNBOUNDED',
+  vsssize: 'a size such as 10%, 20GB, 51200MB or UNBOUNDED (a unit is required)',
 };
 // Normalisations the server also applies before validating -- kept identical so client and server agree.
 const KIND_NORMALIZE = {
-  vsssize: s => s.replace(/\s+/g, ''),
   uncpath: s => s.replace(/\\+$/, ''),
 };
 function clientValid(kind, raw){

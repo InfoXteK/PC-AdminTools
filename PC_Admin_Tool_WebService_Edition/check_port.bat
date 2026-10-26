@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-::  PC Admin and Performance Tool -- advisory port check  (v3.7)
+::  PC Admin and Performance Tool -- advisory port check  (v3.8)
 ::  Usage: check_port.bat PORT
 ::  Prints a WARNING if the TCP port is already listening, or if
 ::  Windows has reserved it (Hyper-V / WinNAT excluded port range).

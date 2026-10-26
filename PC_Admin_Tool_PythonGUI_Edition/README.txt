@@ -1,31 +1,80 @@
-PC Admin & Performance Tool -- Native Python GUI Edition  (v3.7)
+PC Admin & Performance Tool -- Native Python GUI Edition  (v3.8)
 ================================================================
 
+WHAT'S NEW IN v3.8
+  - REVERTED TO THE v3.6 METHOD for the network tasks (Set Static IP, Set DHCP,
+    Flush DNS, Reset TCP/IP, adapter restarts): they run inline again, exactly
+    as in v3.6, which worked on your network. If the connection drops because the
+    network changed, the tool says so (that is expected), does NOT repeat the
+    change, reconnects (also on the NEW IP for Set Static IP) and prints the
+    target's current IP / gateway / DNS -- so the status shows without
+    refreshing anything. Only DISM and CHKDSK still use the detached engine.
+  - NEW CATEGORY "Network Push" (5 tasks, always run last):
+      Push: Set Static IP (no wait)   IP + mask + gateway + DNS1 + DNS2 are sent in ONE pass
+      Push: Set DHCP (no wait)
+      Push: Flush DNS (no wait)
+      Push: Reset TCP/IP & Winsock (no wait)
+      Ping Host (continuous until Stop)
+    A push task sends the command and returns after a few seconds with
+    "Static IP set cmd pushed to the target machine" (or DHCP / Flush DNS /
+    Reset TCP/IP) -- it does not wait for the result. Remaining tasks that
+    need the old connection are skipped after a push that changes the network.
+    Ping Host needs no WinRM login: it pings the target, the IP its name
+    currently resolves to, and up to two extra IPs you type (e.g. the new
+    static IP) in parallel every ~2 seconds until you press STOP, prints
+    every CHANGE and which IP is LIVE.
+  - Operations: 90 in total (was 85).
+  - FIX: network tasks (Set Static IP, Set DHCP, Flush DNS, Reset TCP/IP, adapter
+    restarts) stopped with "PCAT_LAUNCH_FAIL:2". The background task is now
+    started with up to 5 methods (SYSTEM scheduled task, CIM, WMI, schtasks.exe,
+    hidden Start-Process); the log says which one worked, and if all fail you
+    get a readable report with the exact fix. Same change as the Web edition.
+
 WHAT'S NEW IN v3.7
-  - FIX: network operations no longer leave the tool silent or force an
-    application restart. Set Static IP, Set DHCP, Flush DNS, Reset TCP/IP and the
-    adapter restarts now run as a detached SYSTEM job ON THE TARGET. The tool
-    polls with fresh short sessions, waits through the network drop, follows the
-    target to its NEW address after Set Static IP, and prints the result. A
-    sensitive operation is never silently re-run after a dropped connection.
-  - FIX: Rename Computer. A domain-joined PC could not be renamed by any of the 3
-    variants ("Access is denied"): a WinRM/NTLM logon cannot authenticate onward
-    to a domain controller. Domain variant now passes your credential explicitly;
-    Workgroup variant refuses cleanly on a domain PC; the WMIC variant uses the
-    WMI/CIM Rename where wmic.exe has been removed. No CredSSP needed.
-  - NEW (Remote Tools): VSS Storage Size Report, Set VSS Max Storage Size,
-    Create VSS Shadow Copy Now.
-  - NEW (Performance): DISM Analyze / Component Cleanup / Deep Cleanup (ResetBase)
-    / Health Scan, WMI verify + CIM snapshot (WMIC replacement), WMI repair,
-    Rebuild Performance Counters, SSD Retrim, System-Managed Page File.
-  - NEW category "Admin Consoles" (26 operations): Computer Management, Device
-    Manager, Disk Management, Defrag GUI, Disk Cleanup, Services, Event Viewer,
-    Task Scheduler, Firewall, Network Connections, PowerShell, CMD, Registry...
-    They open on the TARGET's own screen using the credentials you entered.
-    Needs someone signed in at the target's physical console, and Windows
-    8.1 / Server 2012 R2 or newer on the target.
-  - Total operations: 105 (was 67) in 8 categories. Web port: 3038 (was 3037).
-  - The PowerShell GUI edition is NOT part of this update and stays at v3.6.
+  - FIX: PC RENAME failed with "Access is denied" on every domain-joined
+    target (all three variants). Cause: Rename-Computer on a domain member
+    must log on to a domain controller itself; a WinRM/NTLM session only
+    carries a network logon, which cannot be passed on to the DC (the
+    "double hop"). The operation now rebuilds the username/password you
+    connected with as a real credential INSIDE the remote session and calls
+    Rename-Computer -DomainCredential, then falls back to the WMI rename
+    method with the same credential, and prints the decoded reason when
+    both fail (2224 = a computer account with the new name already exists
+    in AD, 1326 = logon failure, 5 = no rights, ...). The password is never
+    printed, logged or put on a command line.
+      * Domain-Joined variant: refuses politely on a workgroup PC.
+      * Workgroup/Local variant: refuses on a domain member (a local-only
+        rename would break its AD account) and explains the remote-UAC fix
+        for local accounts.
+      * WMIC/Legacy variant: uses wmic.exe only where it exists and the PC is
+        in a workgroup; otherwise the same WMI method through CIM, so it
+        also works on Windows 11 24H2+ where WMIC is gone.
+      * Restart is now "shutdown /r /t 15" so the reply arrives first.
+  - FIX: after Flush DNS / Set Static IP / Set DHCP / Reset TCP-IP / adapter
+    restart the tool hung and had to be restarted. Those tasks now run
+    DETACHED on the target, the tool reconnects automatically (waits up to
+    5 minutes, also tries the NEW IP for Set Static IP) and then shows the
+    real output. Very long tasks (DISM RestoreHealth, DISM cleanup, CHKDSK)
+    use the same engine, so they no longer die at 170 seconds.
+  - NEW: restarting tasks (Force Restart, Force Sign-out & Restart, Full
+    Soft-Recycle, rename with auto-restart) treat the dropped connection as
+    SUCCESS and skip the remaining tasks with a clear message.
+  - NEW operations (85 in total, was 67):
+      Remote Tools : Resize VSS Shadow Storage (max size: 10%, 20GB,
+                     51200MB, UNBOUNDED)
+      Windows Health: DISM RestoreHealth; DISM Component Store Cleanup
+                     (optional /ResetBase)
+      Performance  : Hardware Inventory via CIM (WMIC replacement), Retrim
+                     SSD, Verify WMI Repository, Rebuild Performance Counters
+      Disk         : CHKDSK Online Scan (read-only)
+      Admin Consoles (new category, 11 launchers): Computer Management,
+                     Disk Management, Device Manager (read-only on Win 8 /
+                     Server 2012 and later - a Windows limit), Services,
+                     Event Viewer, Shared Folders, C$ admin share, Windows
+                     Firewall (guided), Remote PowerShell window, Remote
+                     Command Prompt (winrs), Remote Desktop with the
+                     credential pre-loaded (the way to use GUI-only tools).
+                     They open on THIS PC, connected to the target.
 
 WHAT'S NEW IN v3.6
   - No functional change to this edition's own 67 operations, except
@@ -64,7 +113,7 @@ WHAT'S NEW IN v3.4
     README for the full explanation.
 
 WHAT'S IN THIS FOLDER
-  PCAdminTool.pyw      The complete tool (Tkinter GUI, 67 operations).
+  PCAdminTool.pyw      The complete tool (Tkinter GUI, 90 operations).
   requirements.txt     Just pypsrp -- Tkinter ships with Python itself.
   install_and_run.bat  Double-click: installs pypsrp, then opens the GUI.
   README.txt           This file.
@@ -173,7 +222,7 @@ NOTES
     Auth Transport = "Admin Double-Hop (CredSSP)" and retry.
   - Mapping a network drive uses the TARGET user's own Windows identity
     -- there is no separate username/password field for the share.
-  - Same 67 operations, same categories, and the same PowerShell
+  - Same 90 operations, same categories, and the same PowerShell
     command bodies as the Web-Service Edition (app.py) -- this is a
     desktop-native port of that same operation library, no browser
     or server required. Verified field-for-field and byte-for-byte

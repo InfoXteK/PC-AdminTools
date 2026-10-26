@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-::  PC Admin and Performance Tool -- Web-Service Edition  (v3.7)
+::  PC Admin and Performance Tool -- Web-Service Edition  (v3.8)
 ::  Installs and starts a REAL Windows Service (visible in
 ::  services.msc, auto-starts on boot). Windows / Windows Server.
 ::  (c) 2024-2026 Abdullah | All Rights Reserved
@@ -19,10 +19,10 @@
 :: ============================================================
 setlocal enableextensions
 cd /d "%~dp0"
-set PCA_PORT=3038
+set PCA_PORT=3030
 
 echo ============================================================
-echo   PC Admin and Performance Tool - Web Service Edition v3.7
+echo   PC Admin and Performance Tool - Web Service Edition v3.8
 echo   INSTALLER   ^(bundle v16, port %PCA_PORT%^)
 echo ============================================================
 echo [CHECKPOINT 1] Script started. Folder: "%CD%"
@@ -74,7 +74,7 @@ echo   ^(A message saying the service was not found or not running below
 echo   is completely normal and expected on a first-ever install.^)
 net stop PCAdminTool
 python pcadmintool_service.py remove
-for %%P in (3030 3031 3032 3033 3034 3035 3036 3037 3038) do netsh advfirewall firewall delete rule name="PC Admin Tool %%P" >nul 2>nul
+for %%P in (3030 3031 3032 3033 3034 3035 3036 3037 3038 3030) do netsh advfirewall firewall delete rule name="PC Admin Tool %%P" >nul 2>nul
 echo [CHECKPOINT 7 - OK] cleanup step finished.
 echo.
 
@@ -100,7 +100,7 @@ echo [CHECKPOINT 11 - OK] start command finished ^(see above for its result^).
 
 echo.
 echo ============================================================
-echo   Service installed:  "PC Admin & Performance Tool - Web Service"  ^(v3.7^)
+echo   Service installed:  "PC Admin & Performance Tool - Web Service"  ^(v3.8^)
 echo   Check it in services.msc -- it will keep running in the
 echo   background and restart automatically on reboot.
 echo   Web UI ^(from any host on this subnet^): http://%COMPUTERNAME%:%PCA_PORT%

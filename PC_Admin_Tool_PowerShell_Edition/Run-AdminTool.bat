@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-::  PC Admin and Performance Tool -- PowerShell GUI Edition  (v3.6)
+::  PC Admin and Performance Tool -- PowerShell GUI Edition  (v3.8)
 ::  Self-elevating launcher -- double-click to run
 ::  (c) 2024-2026 Abdullah | All Rights Reserved
 ::

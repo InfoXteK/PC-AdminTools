@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-  PC Admin & Performance Troubleshooting Tool  v3.7  — Web-Service Edition
+  PC Admin & Performance Troubleshooting Tool  v3.8  — Web-Service Edition
   © 2024-2026 Abdullah | All Rights Reserved
   Contact : abuabdullah.be@outlook.com
   Unauthorized copying, modification or redistribution is strictly prohibited.
 
-  Runs as a standalone network service on PORT 3038 -- reachable from any
-  host on the same allowed subnet at http://<this-machine-IP>:3038
+  Runs as a standalone network service on PORT 3030 -- reachable from any
+  host on the same allowed subnet at http://<this-machine-IP>:3030
   Works unmodified on Linux, Windows, and Windows Server hosts (Python 3.9+).
   All logs and session files are written locally on THIS (hosting) machine,
   under the "logs" folder next to this script.
@@ -150,28 +150,6 @@
          to printing the manual command, with the reason, if the host
          isn't Windows or the launch itself fails.
 
-  v3.7 (port 3037 -> 3038):
-    FIX  Network operations (Set Static IP, Set DHCP, Flush DNS, Reset TCP/IP,
-         adapter restarts) no longer leave the tool without a response or force
-         an application restart. They now run as a detached SYSTEM job on the
-         target; this service polls with fresh short-lived sessions, follows the
-         target to its NEW address after Set Static IP, and prints the result.
-    FIX  A sensitive operation is no longer silently RE-RUN after a dropped
-         connection. It is reported as "outcome unknown -- verify" instead.
-    FIX  Rename Computer: all three variants failed with "Access is denied" on a
-         domain-joined target because a WinRM (NTLM) logon cannot authenticate
-         onward to a domain controller. The Domain variant now passes the
-         supplied credential explicitly (-DomainCredential, then the WMI Rename
-         method); Workgroup refuses cleanly on a domain-joined PC; the WMIC
-         variant falls back to the WMI/CIM Rename where wmic.exe is removed.
-    NEW  VSS: size report, set/resize max storage size, create shadow copy now.
-    NEW  Performance: DISM analyze / component cleanup / ResetBase / health scan,
-         WMI verify + CIM snapshot (WMIC replacement), WMI repair, perf-counter
-         rebuild, SSD retrim, system-managed page file.
-    NEW  Category "Admin Consoles": opens Computer/Device/Disk Management, dfrgui,
-         Disk Cleanup, PowerShell, CMD, Firewall, Network Connections and more on
-         the TARGET's own screen, using the admin credentials entered.
-
   v3.6 (port 3036 -> 3037):
     FIX  ROOT CAUSE of the launcher windows closing with no message, found
          after three versions of guessing. cmd.exe treats an unescaped closing
@@ -206,6 +184,117 @@
          parity (see the PowerShell file header). No functional change in
          this file beyond the version, the port and the speed fix above.
 
+  v3.8 (port 3038 -> 3030):
+    CHG  FINAL v3.8 DESIGN (supersedes the "detached" approach for network tasks):
+         Set Static IP / Set DHCP / Flush DNS / Reset TCP-IP / adapter restarts run
+         INLINE again exactly like v3.6 (the method that worked). A dropped
+         connection is reported as expected, the change is NOT repeated, the tool
+         reconnects (also on the NEW IP) and prints the target's current IP/gateway/
+         DNS. DISM / CHKDSK keep the detached engine.
+    NEW  Category "Network Push": Push: Set Static IP / Set DHCP / Flush DNS /
+         Reset TCP-IP (command is sent, the tool does not wait for the result:
+         "<action> cmd pushed to the target machine") and "Ping Host" (continuous
+         until Stop; shows which IP/name answers; needs no WinRM login).
+         90 operations in total.
+    FIX  "Set Static IP / Set DHCP / Flush DNS / Reset TCP/IP / adapter restart"
+         stopped at once with
+             PCAT_LAUNCH_FAIL:2
+             Could not start the detached task on the target
+         Root cause: the v3.7 detached-run engine started the background task
+         with ONE method only -- Invoke-CimMethod Win32_Process.Create. Return
+         code 2 is Windows "Access denied": on many targets that WMI call is
+         refused when it is made from inside a WinRM session (network-logon
+         token, security software, WMI/DCOM permissions), so the task never
+         started and no report could be produced. Nothing else was tried.
+         The launcher now tries FIVE methods in order and stops at the first
+         that works; every one of them creates a process OUTSIDE the WinRM
+         shell, so it still survives the network drop:
+           1. one-shot Scheduled Task running as SYSTEM (Register-/Start-
+              ScheduledTask) -- the most reliable from a remote session
+           2. Win32_Process.Create via CIM          (the v3.7 method)
+           3. Win32_Process.Create via WMI (Invoke-WmiMethod)
+           4. schtasks.exe one-shot task as SYSTEM   (older Windows)
+           5. hidden Start-Process                    (last resort)
+         The log now says which method started the task ("Started on the target
+         via: ..."). If ALL fail, the raw "PCAT_LAUNCH_FAIL:2" line is replaced
+         by a readable report: one line per method with its decoded reason
+         (return code 2 = Access denied, 3 = Insufficient privilege, ...), the
+         account the target saw and whether it is an administrator, and the
+         specific fix (non-admin / remote UAC -> LocalAccountTokenFilterPolicy;
+         admin -> check Task Scheduler + WMI services, EDR, batch-logon policy).
+         The scheduled task and the temporary files are removed after the task
+         reports (cleanup also deletes the task). A launched marker now wins over
+         the "ok" flag of the launch call, so a harmless stream warning cannot
+         discard a task that did start. The task body runs as SYSTEM for methods
+         1 and 4 (netsh / ipconfig / DISM / chkdsk are unaffected by this).
+
+  v3.7 (port 3037 -> 3038):
+    FIX  PC RENAME failed on every domain-joined target with "Access is denied"
+         (all three variants). Root cause: Rename-Computer on a domain member
+         must authenticate to a domain controller itself, but a WinRM/NTLM
+         session only carries a network logon that cannot be forwarded to the
+         DC (the double hop). The payload now rebuilds the username/password
+         you connected with as a real PSCredential INSIDE the remote session
+         and calls Rename-Computer -DomainCredential; if that fails it tries
+         the WMI Win32_ComputerSystem.Rename method with the same credential
+         and prints the decoded reason (2224 = name already exists in AD,
+         1326 = logon failure, 5 = no rights, ...). The password travels only
+         inside the encrypted PSRP channel as base64, is removed from the
+         remote variable immediately and is never printed, logged or placed
+         on a command line (verified by tests that search every output, log
+         and script for it). Restart now uses "shutdown /r /t 15" so the
+         reply returns before the target goes down (Rename-Computer -Restart
+         killed the session mid-reply).
+         - Domain-Joined: refuses with a clear message on a workgroup target.
+         - Workgroup/Local: refuses on a domain member instead of silently
+           desynchronising its AD computer account; explains the remote-UAC
+           (LocalAccountTokenFilterPolicy) cause for local-account failures.
+         - WMIC/Legacy: uses wmic.exe only on workgroup targets that still
+           have it; otherwise automatically uses the same WMI method through
+           CIM (no password on a wmic command line, works on Win11 24H2+).
+    FIX  The app became unusable after network-changing tasks (flush DNS, set
+         static IP, set DHCP, reset TCP/IP, restart/disable adapters) until
+         restarted. Root cause: the target's network dropped under the open
+         WinRM call; pypsrp then waited on the dead socket (read timeout 180 s
+         retried 5 times) and the session was never recovered. Those tasks now
+         run DETACHED on the target (Win32_Process.Create, outside the WinRM
+         shell, so it survives), write their output to a file, and the tool
+         polls with short timeouts and reconnects with back-off (8 attempts
+         x 4 s, repeated until the wait limit, 300 s) and returns the REAL
+         output. For Set Static IP the tool also tries the NEW address, and
+         later tasks continue on whichever address answered.
+    NEW  The same detached engine runs very long tasks, so they no longer die
+         at the 170 s operation timeout: DISM RestoreHealth, DISM component
+         cleanup and CHKDSK online scan (wait limit 60 min).
+    NEW  Reboot-class tasks (Force Restart, Force Sign-out & Restart, Full
+         Soft-Recycle with auto-restart on, rename with auto-restart on) now
+         treat the connection closing as the EXPECTED result, and the tasks
+         that follow in the same run are skipped with a clear message instead
+         of failing one by one. Their shutdown is now issued with a 3-second
+         delay (/t 3) so the reply is delivered first.
+    NEW  VSS: "Resize VSS Shadow Storage (Max Size)" -- vssadmin resize
+         shadowstorage /maxsize= with a validated size (10%, 20GB, 51200MB,
+         UNBOUNDED), report before and after. New param kind: vsssize.
+    NEW  DISM: RestoreHealth; Component Store Cleanup (Analyze + StartComponentCleanup,
+         optional /ResetBase checkbox).
+    NEW  Performance (WMIC replacements, WMIC is gone on Win11 24H2+): Hardware
+         Inventory via CIM, Retrim SSD (Optimize-Volume -ReTrim, skips HDD),
+         Verify WMI Repository (winmgmt /verifyrepository), Rebuild Performance
+         Counters (lodctr /R). Disk: CHKDSK Online Scan (read-only).
+    NEW  Category "Admin Consoles" (11 launchers, 18 more operations in total
+         than v3.6 -> 85): Computer Management (moved here), Disk Management,
+         Device Manager (read-only on Win8+/2012+ -- Microsoft removed remote
+         device changes), Services, Event Viewer, Shared Folders, C$ admin
+         share, Firewall with Advanced Security (guided: wf.msc has no remote
+         switch), Remote PowerShell window (Enter-PSSession), Remote Command
+         Prompt (winrs), Remote Desktop with the credential pre-loaded (the
+         only way to use GUI-only tools: Device Manager with changes, Disk
+         Cleanup, Defrag GUI, Network Connections). They open on the machine
+         HOSTING this service -- a web server cannot open a window on a remote
+         browser. Authentication: "net use" to the target's IPC$ share for MMC/Explorer,
+         cmdkey TERMSRV/host for RDP, environment hand-over for PowerShell,
+         prompt for winrs. Hostnames are validated (no argument injection).
+
   Port bumps alongside every versioned release are a standing project
   convention (see the reference doc) -- update any saved bookmarks, firewall
   rules, and the systemd/service files that reference the old port.
@@ -215,12 +304,12 @@ from flask import Flask, render_template, request, jsonify, Response, stream_wit
 from pypsrp.client import Client
 from pypsrp.exceptions import AuthenticationError, WinRMTransportError, WSManFaultError
 import requests.exceptions
-import json, datetime, socket, re, os, time, threading, subprocess, platform
+import json, datetime, socket, re, os, time, threading, subprocess, platform, base64, secrets
 from pathlib import Path
 
 app = Flask(__name__)
 
-SERVICE_PORT = 3038
+SERVICE_PORT = 3030
 
 # Logs/files live on the hosting machine (Linux, Windows, or Windows Server),
 # in a "logs" folder next to this script -- not tied to a Docker container.
@@ -232,7 +321,7 @@ _stop_flag  = threading.Event()
 _run_lock   = threading.Lock()
 
 COPYRIGHT = (
-    "© 2024-2026 Abdullah | PC Admin & Performance Tool v3.7 | All Rights Reserved\n"
+    "© 2024-2026 Abdullah | PC Admin & Performance Tool v3.8 | All Rights Reserved\n"
     "Contact: abuabdullah.be@outlook.com | Unauthorized use or redistribution is prohibited."
 )
 
@@ -1354,7 +1443,7 @@ if ($info) {
         "command": r"""
 Write-Output "  Forcing an immediate restart -- any unsaved work on the target WILL be lost."
 Write-Output "  The connection will drop now; this is expected."
-Restart-Computer -Force
+shutdown.exe /r /f /t 3
 """
     },
     {
@@ -1389,11 +1478,11 @@ powercfg /a | ForEach-Object { Write-Output "  $_" }
         "danger": True,
         "label": "Force Sign-out & Restart (shutdown /g)",
         "category": "Power Recycle",
-        "description": "shutdown /g /f /t 0 -- restarts and reopens registered apps, distinct from a plain restart",
+        "description": "shutdown /g /f /t 3 -- restarts and reopens registered apps, distinct from a plain restart",
         "command": r"""
 Write-Output "  Signing out and restarting now (shutdown /g) -- Windows will try to reopen registered apps on next login."
 Write-Output "  Any unsaved work WILL be lost. The connection will drop now; this is expected."
-shutdown /g /f /t 0
+shutdown /g /f /t 3
 """
     },
     {
@@ -1424,7 +1513,7 @@ Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -ma
 
 if ($autoRestart) {
     Write-Output "  [3/3] Restarting the computer now (shutdown /g)..."
-    shutdown /g /f /t 0
+    shutdown /g /f /t 3
 } else {
     Write-Output "  [3/3] Auto-Restart is OFF -- network + USB cycle complete, restart skipped."
     Write-Output "  Run 'Force Restart Now' or 'Force Sign-out & Restart' (Power Recycle) manually when ready."
@@ -1462,19 +1551,63 @@ if (-not $nic) {
     return
 }
 
-Write-Output "  Setting static IP on '$adapterName': $ip / $mask, gateway $gw"
-netsh interface ipv4 set address name="$adapterName" static $ip $mask $gw 2>&1 | ForEach-Object { Write-Output "  $_" }
+$prefix = 0
+foreach ($o in $mask.Split('.')) { $prefix += ([Convert]::ToString([int]$o, 2).ToCharArray() | Where-Object { $_ -eq '1' }).Count }
 
-if ($dns1) {
-    Write-Output "  Setting primary DNS: $dns1"
-    netsh interface ipv4 set dns name="$adapterName" static $dns1 primary 2>&1 | ForEach-Object { Write-Output "  $_" }
-}
-if ($dns2) {
-    Write-Output "  Adding secondary DNS: $dns2"
-    netsh interface ipv4 add dns name="$adapterName" $dns2 index=2 2>&1 | ForEach-Object { Write-Output "  $_" }
+function Get-Missing {
+    $m = @()
+    $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $ip } | Select-Object -First 1
+    if (-not $a) { $m += 'IP address' }
+    elseif ($a.PrefixLength -ne $prefix) { $m += 'subnet mask' }
+    $c = Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue
+    if (-not (@($c.IPv4DefaultGateway.NextHop) -contains $gw)) { $m += 'default gateway' }
+    $d = @((Get-DnsClientServerAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
+    if ($dns1 -and $d[0] -ne $dns1) { $m += 'primary DNS' }
+    if ($dns2 -and $d[1] -ne $dns2) { $m += 'secondary DNS' }
+    return $m
 }
 
-Start-Sleep -Seconds 2
+function Set-AllAtOnce {
+    # IP + mask + gateway + DNS are pushed back-to-back in ONE pass (no output handling,
+    # no waiting between them) so the connection drop cannot leave a half-applied setup.
+    $o1 = netsh interface ipv4 set address name="$adapterName" static $ip $mask $gw 2>&1
+    $o2 = $null
+    $o3 = $null
+    if ($dns1) { $o2 = netsh interface ipv4 set dnsservers name="$adapterName" static $dns1 primary validate=no 2>&1 }
+    if ($dns2) { $o3 = netsh interface ipv4 add dnsservers name="$adapterName" $dns2 index=2 validate=no 2>&1 }
+    foreach ($x in @($o1) + @($o2) + @($o3)) { if ("$x".Trim()) { Write-Output "  $x" } }
+}
+
+Write-Output "  Target configuration on '$adapterName': $ip / $mask (/$prefix), gateway $gw, DNS $dns1 $dns2"
+$haveCheck = [bool](Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue)
+if (-not $haveCheck) {
+    Set-AllAtOnce
+    Start-Sleep -Seconds 3
+} else {
+    $missing = @(Get-Missing)
+    if ($missing.Count -eq 0) {
+        Write-Output "  Already configured exactly like this -- nothing to change."
+    } else {
+        $attempt = 0
+        while ($attempt -lt 3 -and $missing.Count -gt 0) {
+            $attempt++
+            Write-Output "  Applying IP, mask, gateway and DNS together (attempt $attempt of 3)..."
+            Set-AllAtOnce
+            $until = (Get-Date).AddSeconds(20)
+            do {
+                Start-Sleep -Seconds 2
+                $missing = @(Get-Missing)
+            } while ($missing.Count -gt 0 -and (Get-Date) -lt $until)
+            if ($missing.Count -gt 0) { Write-Output "  Not applied yet: $($missing -join ', ')" }
+        }
+    }
+    if ($missing.Count -eq 0) {
+        Write-Output "  VERIFIED: IP address, subnet mask, gateway and DNS all match the requested values."
+    } else {
+        Write-Output "  WARNING: after 3 attempts these are still not applied: $($missing -join ', ')"
+    }
+}
+
 Write-Output "  === RESULTING CONFIGURATION ==="
 Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
@@ -1492,19 +1625,30 @@ Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinu
         "params": [
             {"key": "ADAPTER", "kind": "adaptername", "label": "Adapter Name", "required": True, "default": "Ethernet"}
         ],
-        "command": r"""
-$adapterName = "{{ADAPTER}}"
+        "command": r"""$adapterName = "{{ADAPTER}}"
 $nic = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
 if (-not $nic) {
     Write-Output "  Adapter '$adapterName' not found. Available adapters:"
     Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
     return
 }
-Write-Output "  Switching '$adapterName' to DHCP..."
-netsh interface ipv4 set address name="$adapterName" source=dhcp 2>&1 | ForEach-Object { Write-Output "  $_" }
-netsh interface ipv4 set dnsservers name="$adapterName" source=dhcp 2>&1 | ForEach-Object { Write-Output "  $_" }
+Write-Output "  Switching '$adapterName' to DHCP (address + DNS together)..."
+$o1 = netsh interface ipv4 set address name="$adapterName" source=dhcp 2>&1
+$o2 = netsh interface ipv4 set dnsservers name="$adapterName" source=dhcp 2>&1
+foreach ($x in @($o1) + @($o2)) { if ("$x".Trim()) { Write-Output "  $x" } }
 ipconfig /renew "$adapterName" | Out-Null
-Start-Sleep -Seconds 2
+if (Get-Command Get-NetIPInterface -ErrorAction SilentlyContinue) {
+    $until = (Get-Date).AddSeconds(25)
+    $ok = $false
+    do {
+        Start-Sleep -Seconds 2
+        $i = Get-NetIPInterface -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1
+        if ($i -and $i.Dhcp -eq 'Enabled' -and $a) { $ok = $true }
+    } while (-not $ok -and (Get-Date) -lt $until)
+    if ($ok) { Write-Output "  VERIFIED: DHCP is enabled and a lease was obtained ($($a.IPAddress))." }
+    else { Write-Output "  WARNING: DHCP is set, but no lease was obtained within 25 s (no DHCP server reachable yet?)." }
+}
 Write-Output "  === RESULTING CONFIGURATION ==="
 Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
@@ -1514,180 +1658,214 @@ Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinu
 """
     },
     {
-        "id": 'rt_rename_pc_domain',
-        "label": 'Rename Computer (Domain-Joined)',
-        "category": 'Remote Tools',
-        "description": 'Renames a domain-joined PC passing YOUR credential explicitly (-DomainCredential, then WMI Rename) -- no CredSSP needed; restart optional',
+        "id": "rt_rename_pc_domain",
+        "danger": True,
+        "needs_cred": True,
+        "label": "Rename Computer (Domain-Joined)",
+        "category": "Remote Tools",
+        "description": "Renames a domain member using the username/password you connected with as an explicit domain credential (no CredSSP needed); restart optional",
         "params": [
-            {'key': 'NEW_NAME', 'kind': 'computername', 'label': 'New Computer Name', 'required': True},
-            {'key': 'AUTO_RESTART', 'kind': 'bool', 'label': 'Automatically restart when done', 'required': True, 'default': 'true', 'help': "Unchecked: rename now, restart later yourself (name won't take effect until then)"},
+            {"key": "NEW_NAME", "kind": "computername", "label": "New Computer Name", "required": True},
+            {"key": "AUTO_RESTART", "kind": "bool", "label": "Automatically restart when done",
+             "required": True, "default": "true",
+             "help": "Unchecked: rename now, restart later yourself (name won't take effect until then)"}
         ],
         "command": r"""
-$newName = "{{NEW_NAME}}"
-$autoRestart = {{AUTO_RESTART}}
-
-function Get-RenameReturnText([int]$c) {
-    switch ($c) {
-        5    { 'Access denied -- the account cannot rename this computer object in Active Directory' }
-        53   { 'Network path not found -- the target cannot reach a domain controller' }
-        87   { 'Invalid parameter -- the new name is not acceptable' }
-        1219 { 'Conflicting credentials -- the target already has a connection to the DC under another account' }
-        1326 { 'Logon failure -- bad user name or password for the domain' }
-        1355 { 'The domain could not be contacted (DNS / DC unreachable from the target)' }
-        2224 { 'A computer account with the new name already exists in the domain' }
-        default { "see https://learn.microsoft.com/windows/win32/cimwin32prov/rename-method-in-class-win32-computersystem (code $c)" }
+$hint = {
+    param($c)
+    switch ([string]$c) {
+        '5'    { 'Access denied: the account you connected with is not allowed to rename this computer object in AD (needs Domain Admin or delegated "rename computer" rights), or is not a local admin on the target.' }
+        '53'   { 'Network path not found: the target cannot reach a domain controller (check DNS / VPN / firewall on the target).' }
+        '87'   { 'Invalid parameter: the new name is not accepted (NetBIOS rules: max 15 chars, letters/digits/hyphen).' }
+        '1326' { 'Logon failure: the username/password you connected with was rejected by the domain controller.' }
+        '1355' { 'The domain, or a domain controller for it, could not be contacted from the target (DNS).' }
+        '1909' { 'That account is locked out.' }
+        '2224' { 'A computer account with the NEW name already exists in AD -- pick a different name or delete the stale account first.' }
+        '2691' { 'The computer is already joined to that name/domain.' }
+        default { "Win32 code $c." }
     }
 }
 
+$newName = "{{NEW_NAME}}"
+$autoRestart = {{AUTO_RESTART}}
 $cs = Get-CimInstance Win32_ComputerSystem
-Write-Output "  Current name : $env:COMPUTERNAME"
-Write-Output "  New name     : $newName"
-if ($env:COMPUTERNAME -ieq $newName) { Write-Output "  The new name is identical to the current name -- nothing to do."; return }
+Write-Output "  Current name : $($cs.Name)"
+Write-Output "  Renaming to  : $newName"
+Write-Output "  Membership   : $(if ($cs.PartOfDomain) { 'DOMAIN ' + $cs.Domain } else { 'WORKGROUP ' + $cs.Domain })"
 if (-not $cs.PartOfDomain) {
-    Write-Output "  This target is NOT domain-joined (workgroup: $($cs.Workgroup))."
-    Write-Output "  Use 'Rename Computer (Workgroup/Local)' instead."
+    Write-Output "  This target is NOT domain-joined -- use 'Rename Computer (Workgroup/Local)' instead. Nothing was changed."
     return
 }
-Write-Output "  Domain       : $($cs.Domain)"
-Write-Output "  Credential   : $__u  (passed explicitly to the domain -- not relying on this WinRM logon)"
+if ($cs.Name -ieq $newName) { Write-Output "  Computer is already named $newName -- nothing to do."; return }
+Write-Output "  Using the username/password you connected with as an explicit DOMAIN credential"
+Write-Output "  (built on the target, so no CredSSP / double-hop is needed)."
 $done = $false
-
-# Attempt 1 -- Rename-Computer with an explicit domain credential
 try {
     Rename-Computer -NewName $newName -DomainCredential $__cred -Force -ErrorAction Stop
     $done = $true
-    Write-Output "  [1/2] Rename-Computer -DomainCredential : SUCCESS"
+    Write-Output "  Method 1 (Rename-Computer -DomainCredential) succeeded."
 } catch {
-    Write-Output "  [1/2] Rename-Computer -DomainCredential failed: $($_.Exception.Message)"
+    Write-Output "  Method 1 failed: $($_.Exception.Message)"
 }
-
-# Attempt 2 -- Win32_ComputerSystem.Rename with the credential as method arguments
 if (-not $done) {
     try {
-        $r = Invoke-CimMethod -InputObject $cs -MethodName Rename -Arguments @{ Name = $newName; Password = $__p; UserName = $__u } -ErrorAction Stop
-        if ($r.ReturnValue -eq 0) {
-            $done = $true
-            Write-Output "  [2/2] Win32_ComputerSystem.Rename : SUCCESS"
-        } else {
-            Write-Output "  [2/2] Win32_ComputerSystem.Rename failed, code $($r.ReturnValue): $(Get-RenameReturnText $r.ReturnValue)"
-        }
+        $r = Invoke-CimMethod -InputObject (Get-CimInstance Win32_ComputerSystem) -MethodName Rename -Arguments @{ Name = $newName; UserName = $__cred.UserName; Password = $__cred.GetNetworkCredential().Password } -ErrorAction Stop
+        if ($r.ReturnValue -eq 0) { $done = $true; Write-Output "  Method 2 (WMI Win32_ComputerSystem.Rename) succeeded." }
+        else { Write-Output "  Method 2 failed, code $($r.ReturnValue): $(& $hint $r.ReturnValue)" }
     } catch {
-        Write-Output "  [2/2] Win32_ComputerSystem.Rename failed: $($_.Exception.Message)"
+        Write-Output "  Method 2 failed: $($_.Exception.Message)"
     }
 }
-
 if (-not $done) {
-    Write-Output ""
-    Write-Output "  RENAME DID NOT COMPLETE. What to check, in order of likelihood:"
-    Write-Output "   1. The account '$__u' must be allowed to rename the COMPUTER OBJECT in AD (Domain Admin, or"
-    Write-Output "      delegated rights: Write dNSHostName / sAMAccountName / servicePrincipalName on that computer)."
-    Write-Output "   2. The target must be able to reach a domain controller (DNS + ports 88/389/445 from the target)."
-    Write-Output "   3. No other computer object named '$newName' may already exist in the domain."
-    Write-Output "   4. The username must be a DOMAIN account (DOMAIN\user or user@domain) -- a local account cannot rename a domain-joined PC."
+    Write-Output "  Rename FAILED -- nothing was changed."
+    Write-Output "  Check: (1) the account is Domain Admin / has rename rights on the computer object,"
+    Write-Output "         (2) the target can resolve + reach a domain controller,"
+    Write-Output "         (3) no AD computer account with the new name already exists."
+    try { Write-Output "  Secure channel to domain: $(Test-ComputerSecureChannel)" } catch { Write-Output "  Secure channel test could not run: $($_.Exception.Message)" }
+}
 
-    return
-}
-if ($autoRestart) {
-    Write-Output "  Rename submitted -- the target restarts in 8 seconds."
-    shutdown.exe /r /t 8 /c "PC Admin Tool: computer renamed to $newName" | Out-Null
-} else {
-    Write-Output "  Rename submitted -- Auto-Restart is OFF. The new name will NOT take effect until"
-    Write-Output "  this computer restarts -- run 'Force Restart Now' (Power Recycle) when ready."
-}
-""",
-        "danger": True,
-        "needs_cred": True,
-    },
-    {
-        "id": 'rt_rename_pc_workgroup',
-        "label": 'Rename Computer (Workgroup/Local)',
-        "category": 'Remote Tools',
-        "description": "Rename-Computer for NON-domain targets; refuses cleanly on a domain-joined PC instead of failing with 'Access is denied' -- restart optional",
-        "params": [
-            {'key': 'NEW_NAME', 'kind': 'computername', 'label': 'New Computer Name', 'required': True},
-            {'key': 'AUTO_RESTART', 'kind': 'bool', 'label': 'Automatically restart when done', 'required': True, 'default': 'true', 'help': "Unchecked: rename now, restart later yourself (name won't take effect until then)"},
-        ],
-        "command": r"""
-$newName = "{{NEW_NAME}}"
-$autoRestart = {{AUTO_RESTART}}
-$cs = Get-CimInstance Win32_ComputerSystem
-Write-Output "  Current name: $env:COMPUTERNAME"
-Write-Output "  Renaming to : $newName  (workgroup/local)"
-if ($env:COMPUTERNAME -ieq $newName) { Write-Output "  The new name is identical to the current name -- nothing to do."; return }
-if ($cs.PartOfDomain) {
-    Write-Output "  REFUSED: this target is joined to the domain '$($cs.Domain)'."
-    Write-Output "  A domain-joined PC cannot be renamed without a domain credential -- that is exactly why this"
-    Write-Output "  option ended in 'Access is denied'. Use 'Rename Computer (Domain-Joined)' instead."
-    return
-}
-try {
-    Rename-Computer -NewName $newName -Force -ErrorAction Stop
+if ($done) {
     if ($autoRestart) {
-        Write-Output "  Rename submitted -- the target restarts in 8 seconds."
-        shutdown.exe /r /t 8 /c "PC Admin Tool: computer renamed to $newName" | Out-Null
+        shutdown.exe /r /t 15 /c "PC Admin Tool: computer rename to $newName" | Out-Null
+        Write-Output "  Rename submitted -- target restarts in 15 seconds (the session will drop; that is expected)."
     } else {
         Write-Output "  Rename submitted -- Auto-Restart is OFF. The new name will NOT take effect until"
         Write-Output "  this computer restarts -- run 'Force Restart Now' (Power Recycle) when ready."
     }
-} catch {
-    Write-Output "  Rename FAILED: $($_.Exception.Message)"
-    Write-Output "  A local rename needs a local ADMINISTRATOR account (use the Basic/NTLM transport with .\Administrator)."
 }
-""",
-        "danger": True,
+"""
     },
     {
-        "id": 'rt_rename_pc_wmic_legacy',
-        "label": 'Rename Computer via WMIC / WMI (Legacy -- Manual Restart Required)',
-        "category": 'Remote Tools',
-        "description": 'wmic computersystem ... call rename on old targets; where WMIC is removed (Win11 24H2+) it automatically uses the WMI/CIM Rename method instead. Never auto-restarts',
-        "params": [
-            {'key': 'NEW_NAME', 'kind': 'computername', 'label': 'New Computer Name', 'required': True},
-        ],
-        "command": r"""
-$newName = "{{NEW_NAME}}"
-
-function Get-RenameReturnText([int]$c) {
-    switch ($c) {
-        5    { 'Access denied -- the account cannot rename this computer object in Active Directory' }
-        53   { 'Network path not found -- the target cannot reach a domain controller' }
-        87   { 'Invalid parameter -- the new name is not acceptable' }
-        1219 { 'Conflicting credentials -- the target already has a connection to the DC under another account' }
-        1326 { 'Logon failure -- bad user name or password for the domain' }
-        1355 { 'The domain could not be contacted (DNS / DC unreachable from the target)' }
-        2224 { 'A computer account with the new name already exists in the domain' }
-        default { "see https://learn.microsoft.com/windows/win32/cimwin32prov/rename-method-in-class-win32-computersystem (code $c)" }
-    }
-}
-
-$cs = Get-CimInstance Win32_ComputerSystem
-Write-Output "  Current name: $env:COMPUTERNAME"
-Write-Output "  New name    : $newName   (domain-joined: $($cs.PartOfDomain))"
-if ($env:COMPUTERNAME -ieq $newName) { Write-Output "  The new name is identical to the current name -- nothing to do."; return }
-$wmic = Get-Command wmic.exe -ErrorAction SilentlyContinue
-if ($wmic -and -not $cs.PartOfDomain) {
-    Write-Output "  wmic.exe is present -- using it."
-    $result = wmic computersystem where "name='$env:COMPUTERNAME'" call rename name="$newName" 2>&1
-    $result | ForEach-Object { Write-Output "  $_" }
-    Write-Output "  Rename submitted via WMIC -- this does NOT auto-restart. Run 'Force Restart Now' (Power Recycle) when ready."
-    return
-}
-if (-not $wmic) { Write-Output "  wmic.exe is not on this target (removed on Windows 11 24H2+ / recent Server) -- using the WMI/CIM Rename method instead." }
-else            { Write-Output "  Target is domain-joined: WMIC cannot pass a credential -- using the WMI/CIM Rename method with your credential." }
-try {
-    if ($cs.PartOfDomain) { $args2 = @{ Name = $newName; Password = $__p; UserName = $__u } } else { $args2 = @{ Name = $newName } }
-    $r = Invoke-CimMethod -InputObject $cs -MethodName Rename -Arguments $args2 -ErrorAction Stop
-    if ($r.ReturnValue -eq 0) {
-        Write-Output "  Rename submitted via WMI/CIM -- this does NOT auto-restart. Run 'Force Restart Now' (Power Recycle) when ready."
-    } else {
-        Write-Output "  Rename FAILED, code $($r.ReturnValue): $(Get-RenameReturnText $r.ReturnValue)"
-    }
-} catch {
-    Write-Output "  Rename FAILED: $($_.Exception.Message)"
-}
-""",
+        "id": "rt_rename_pc_workgroup",
         "danger": True,
         "needs_cred": True,
+        "label": "Rename Computer (Workgroup/Local)",
+        "category": "Remote Tools",
+        "description": "Local rename for NON-domain targets (refuses on a domain member and says so); restart optional",
+        "params": [
+            {"key": "NEW_NAME", "kind": "computername", "label": "New Computer Name", "required": True},
+            {"key": "AUTO_RESTART", "kind": "bool", "label": "Automatically restart when done",
+             "required": True, "default": "true",
+             "help": "Unchecked: rename now, restart later yourself (name won't take effect until then)"}
+        ],
+        "command": r"""
+$hint = {
+    param($c)
+    switch ([string]$c) {
+        '5'    { 'Access denied: the account you connected with is not allowed to rename this computer object in AD (needs Domain Admin or delegated "rename computer" rights), or is not a local admin on the target.' }
+        '53'   { 'Network path not found: the target cannot reach a domain controller (check DNS / VPN / firewall on the target).' }
+        '87'   { 'Invalid parameter: the new name is not accepted (NetBIOS rules: max 15 chars, letters/digits/hyphen).' }
+        '1326' { 'Logon failure: the username/password you connected with was rejected by the domain controller.' }
+        '1355' { 'The domain, or a domain controller for it, could not be contacted from the target (DNS).' }
+        '1909' { 'That account is locked out.' }
+        '2224' { 'A computer account with the NEW name already exists in AD -- pick a different name or delete the stale account first.' }
+        '2691' { 'The computer is already joined to that name/domain.' }
+        default { "Win32 code $c." }
+    }
+}
+
+$newName = "{{NEW_NAME}}"
+$autoRestart = {{AUTO_RESTART}}
+$cs = Get-CimInstance Win32_ComputerSystem
+Write-Output "  Current name : $($cs.Name)"
+Write-Output "  Renaming to  : $newName"
+Write-Output "  Membership   : $(if ($cs.PartOfDomain) { 'DOMAIN ' + $cs.Domain } else { 'WORKGROUP ' + $cs.Domain })"
+if ($cs.PartOfDomain) {
+    Write-Output "  This target IS joined to domain $($cs.Domain). A local-only rename would leave its AD computer"
+    Write-Output "  account out of sync and can break domain logon -- use 'Rename Computer (Domain-Joined)'. Nothing was changed."
+    return
+}
+if ($cs.Name -ieq $newName) { Write-Output "  Computer is already named $newName -- nothing to do."; return }
+$done = $false
+try {
+    Rename-Computer -NewName $newName -Force -ErrorAction Stop
+    $done = $true
+    Write-Output "  Method 1 (Rename-Computer) succeeded."
+} catch {
+    Write-Output "  Method 1 failed: $($_.Exception.Message)"
+}
+if (-not $done) {
+    try {
+        $r = Invoke-CimMethod -InputObject (Get-CimInstance Win32_ComputerSystem) -MethodName Rename -Arguments @{ Name = $newName } -ErrorAction Stop
+        if ($r.ReturnValue -eq 0) { $done = $true; Write-Output "  Method 2 (WMI Win32_ComputerSystem.Rename) succeeded." }
+        else { Write-Output "  Method 2 failed, code $($r.ReturnValue): $(& $hint $r.ReturnValue)" }
+    } catch {
+        Write-Output "  Method 2 failed: $($_.Exception.Message)"
+    }
+}
+if (-not $done) {
+    Write-Output "  Rename FAILED -- nothing was changed."
+    Write-Output "  If you connected with a LOCAL (non-domain) admin account that is not the built-in Administrator,"
+    Write-Output "  Windows remote UAC filtering blocks this. Fix on the target (Admin PowerShell):"
+    Write-Output "    reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f"
+}
+
+if ($done) {
+    if ($autoRestart) {
+        shutdown.exe /r /t 15 /c "PC Admin Tool: computer rename to $newName" | Out-Null
+        Write-Output "  Rename submitted -- target restarts in 15 seconds (the session will drop; that is expected)."
+    } else {
+        Write-Output "  Rename submitted -- Auto-Restart is OFF. The new name will NOT take effect until"
+        Write-Output "  this computer restarts -- run 'Force Restart Now' (Power Recycle) when ready."
+    }
+}
+"""
+    },
+    {
+        "id": "rt_rename_pc_wmic_legacy",
+        "danger": True,
+        "needs_cred": True,
+        "label": "Rename Computer via WMIC (Legacy -- Manual Restart Required)",
+        "category": "Remote Tools",
+        "description": "WMIC where present; automatically uses the same WMI rename method via CIM when WMIC is removed (Win11 24H2+) or the target is domain-joined",
+        "params": [
+            {"key": "NEW_NAME", "kind": "computername", "label": "New Computer Name", "required": True}
+        ],
+        "command": r"""
+$hint = {
+    param($c)
+    switch ([string]$c) {
+        '5'    { 'Access denied: the account you connected with is not allowed to rename this computer object in AD (needs Domain Admin or delegated "rename computer" rights), or is not a local admin on the target.' }
+        '53'   { 'Network path not found: the target cannot reach a domain controller (check DNS / VPN / firewall on the target).' }
+        '87'   { 'Invalid parameter: the new name is not accepted (NetBIOS rules: max 15 chars, letters/digits/hyphen).' }
+        '1326' { 'Logon failure: the username/password you connected with was rejected by the domain controller.' }
+        '1355' { 'The domain, or a domain controller for it, could not be contacted from the target (DNS).' }
+        '1909' { 'That account is locked out.' }
+        '2224' { 'A computer account with the NEW name already exists in AD -- pick a different name or delete the stale account first.' }
+        '2691' { 'The computer is already joined to that name/domain.' }
+        default { "Win32 code $c." }
+    }
+}
+
+$newName = "{{NEW_NAME}}"
+$cs = Get-CimInstance Win32_ComputerSystem
+Write-Output "  Current name : $($cs.Name)"
+Write-Output "  Renaming to  : $newName"
+Write-Output "  Membership   : $(if ($cs.PartOfDomain) { 'DOMAIN ' + $cs.Domain } else { 'WORKGROUP ' + $cs.Domain })"
+if ($cs.Name -ieq $newName) { Write-Output "  Computer is already named $newName -- nothing to do."; return }
+$wmic = Get-Command wmic.exe -ErrorAction SilentlyContinue
+$done = $false
+if ($wmic -and -not $cs.PartOfDomain) {
+    Write-Output "  wmic.exe found -- using it (workgroup target)."
+    $result = wmic computersystem where "name='$env:COMPUTERNAME'" call rename name="$newName" 2>&1
+    $result | ForEach-Object { Write-Output "  $_" }
+    if (($result | Out-String) -match 'ReturnValue = 0') { $done = $true }
+} else {
+    if (-not $wmic) { Write-Output "  wmic.exe is not present on this target (removed in Windows 11 24H2+) -- using the same WMI method through CIM instead." }
+    else { Write-Output "  Domain-joined target: using the WMI rename method via CIM with your credentials (avoids putting a password on a wmic command line)." }
+    try {
+        if ($cs.PartOfDomain) { $args2 = @{ Name = $newName; UserName = $__cred.UserName; Password = $__cred.GetNetworkCredential().Password } }
+        else { $args2 = @{ Name = $newName } }
+        $r = Invoke-CimMethod -InputObject (Get-CimInstance Win32_ComputerSystem) -MethodName Rename -Arguments $args2 -ErrorAction Stop
+        if ($r.ReturnValue -eq 0) { $done = $true; Write-Output "  WMI Win32_ComputerSystem.Rename succeeded." }
+        else { Write-Output "  WMI rename failed, code $($r.ReturnValue): $(& $hint $r.ReturnValue)" }
+    } catch {
+        Write-Output "  WMI rename failed: $($_.Exception.Message)"
+    }
+}
+if ($done) { Write-Output "  Rename submitted -- this does NOT auto-restart. Run 'Force Restart Now' (Power Recycle) when ready." }
+else { Write-Output "  Rename FAILED -- nothing was changed." }
+"""
     },
     {
         "id": "rt_vss_view",
@@ -1780,21 +1958,6 @@ if (-not $tasks) {
         Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction SilentlyContinue | Format-List * | Out-String | Write-Output
     }
 }
-"""
-    },
-    {
-        "id": "rt_open_computer_management",
-        "danger": False,
-        "label": "Open Computer Management (Connected to Target)",
-        "category": "Remote Tools",
-        "description": "Launches mmc.exe compmgmt.msc /computer:\\\\<target> locally on the machine hosting this service (same as the desktop editions do on your own PC)",
-        "command": r"""
-# Handled specially by the host application -- never actually sent to the remote target.
-# Desktop editions (PowerShell / Python GUI) launch locally:
-#   mmc.exe compmgmt.msc /computer:\\<target>
-# The Web edition returns that command as text instead of executing anything,
-# since a server cannot open a window on your screen.
-Write-Output "  (informational placeholder -- see description)"
 """
     },
     {
@@ -2449,4007 +2612,399 @@ Write-Output "  Note: this lists what is SAVED in the profile (reconnected at ev
 Write-Output "  right now is only visible inside that user's own session -- ask them to open This PC, or check for a red X."
 """
     },
-    # ═══ v3.7 additions: VSS size ops, DISM/WMI tuning, Admin Consoles ═══
+
+    # ─── v3.7 additions ──────────────────────────────────────────────────────
     {
-        "id": 'rt_vss_size_report',
-        "label": 'VSS Storage Size Report (Used / Allocated / Max vs Volume Size)',
+        "id": 'rt_vss_resize_storage',
+        "danger": True,
+        "label": 'Resize VSS Shadow Storage (Max Size)',
         "category": 'Remote Tools',
-        "description": "Per volume: shadow storage Used, Allocated and Max (as GB and % of the volume), where it is stored, and the volume's free space",
-        "command": r"""
-function Fmt($b) { if ($null -eq $b) { return 'n/a' }; if ($b -ge 1TB) { '{0:N2} TB' -f ($b/1TB) } elseif ($b -ge 1GB) { '{0:N2} GB' -f ($b/1GB) } else { '{0:N0} MB' -f ($b/1MB) } }
-$st = @(Get-CimInstance Win32_ShadowStorage -ErrorAction SilentlyContinue)
-Write-Output "  === VSS STORAGE SIZE vs VOLUME SIZE ==="
-if ($st.Count -eq 0) {
-    Write-Output "  No shadow-copy storage is configured on any volume (System Protection is off everywhere)."
-    Write-Output "  Use 'Set VSS Max Storage Size' to create it."
-    return
-}
-$vols = @{}
-Get-CimInstance Win32_Volume -ErrorAction SilentlyContinue | ForEach-Object { $vols[$_.DeviceID] = $_ }
-foreach ($s in $st) {
-    $v  = $vols[$s.Volume.DeviceID]
-    $dv = $vols[$s.DiffVolume.DeviceID]
-    $name = if ($v -and $v.DriveLetter) { $v.DriveLetter } else { $s.Volume.DeviceID }
-    $on   = if ($dv -and $dv.DriveLetter) { $dv.DriveLetter } else { $s.DiffVolume.DeviceID }
-    $unb  = ($s.MaxSpace -lt 0) -or ($s.MaxSpace -gt 9e18)
-    Write-Output ""
-    Write-Output "  Volume $name   (capacity $(Fmt $v.Capacity), free $(Fmt $v.FreeSpace))"
-    Write-Output "    Stored on     : $on"
-    Write-Output "    Used          : $(Fmt $s.UsedSpace)"
-    Write-Output "    Allocated     : $(Fmt $s.AllocatedSpace)"
-    if ($unb) { Write-Output "    Maximum       : UNBOUNDED  (can grow until the volume is full)" }
-    else {
-        $pct = if ($v -and $v.Capacity) { [math]::Round(100.0 * $s.MaxSpace / $v.Capacity, 1) } else { 'n/a' }
-        Write-Output "    Maximum       : $(Fmt $s.MaxSpace)  ($pct % of the volume)"
-    }
-}
-$cnt = @(Get-CimInstance Win32_ShadowCopy -ErrorAction SilentlyContinue).Count
-Write-Output ""
-Write-Output "  Shadow copies currently stored: $cnt"
-""",
-        "danger": False,
-    },
-    {
-        "id": 'rt_vss_set_maxsize',
-        "label": 'Set VSS Max Storage Size (Resize / Create Shadow Storage)',
-        "category": 'Remote Tools',
-        "description": 'vssadmin resize/add shadowstorage /maxsize=... -- limit how much disk shadow copies may use (e.g. 10GB, 20%, UNBOUNDED). Shrinking deletes the OLDEST copies',
+        "description": 'vssadmin resize shadowstorage /for= /on= /maxsize= -- set the storage cap for shadow copies on a volume (shrinking may delete the oldest copies)',
         "params": [
-            {'key': 'VOLUME', 'kind': 'drive', 'label': 'Volume to protect (drive letter)', 'required': True, 'default': 'C'},
-            {'key': 'MAX_SIZE', 'kind': 'vsssize', 'label': 'Max size (e.g. 10GB, 20%, 500MB, UNBOUNDED)', 'required': True, 'default': '10GB', 'help': 'Minimum 320MB. A percentage is of the volume capacity.'},
-            {'key': 'STORAGE_VOLUME', 'kind': 'drive', 'label': 'Store shadow data on (blank = same volume)', 'required': False},
+            {'key': 'VOLUME', 'kind': 'drive', 'label': 'Volume', 'required': True, 'default': 'C'},
+            {'key': 'MAXSIZE', 'kind': 'vsssize', 'label': 'Max size (e.g. 10%, 20GB, 51200MB, UNBOUNDED)', 'required': True, 'default': '10%', 'help': '10% | 20GB | 51200MB | UNBOUNDED  (minimum 1MB)'}
         ],
         "command": r"""
-$vol  = ("{{VOLUME}}".TrimEnd(':')).ToUpper() + ':'
-$size = "{{MAX_SIZE}}"
-$on   = "{{STORAGE_VOLUME}}"
-if ($on) { $on = ($on.TrimEnd(':')).ToUpper() + ':' } else { $on = $vol }
-Write-Output "  Volume: $vol    Storage on: $on    New max size: $size"
-$v = Get-CimInstance Win32_Volume -Filter "DriveLetter='$vol'" -ErrorAction SilentlyContinue
-if (-not $v) { Write-Output "  Volume $vol was not found on this target."; return }
-$exists = @(Get-CimInstance Win32_ShadowStorage -ErrorAction SilentlyContinue | Where-Object { $_.Volume.DeviceID -eq $v.DeviceID }).Count -gt 0
-if ($exists) {
-    Write-Output "  Shadow storage already exists for $vol -- resizing."
-    vssadmin resize shadowstorage /for=$vol /on=$on /maxsize=$size 2>&1 | ForEach-Object { Write-Output "  $_" }
-} else {
-    Write-Output "  No shadow storage for $vol yet -- creating it."
-    vssadmin add shadowstorage /for=$vol /on=$on /maxsize=$size 2>&1 | ForEach-Object { Write-Output "  $_" }
-}
-Write-Output ""
-Write-Output "  === RESULT ==="
+$vol = "{{VOLUME}}"
+$size = "{{MAXSIZE}}"
+Write-Output "  === BEFORE (volume $vol) ==="
 vssadmin list shadowstorage /for=$vol 2>&1 | ForEach-Object { Write-Output "  $_" }
-""",
-        "danger": True,
+Write-Output ""
+Write-Output "  Setting maximum shadow storage on $vol to $size ..."
+$out = vssadmin resize shadowstorage /for=$vol /on=$vol /maxsize=$size 2>&1
+$out | ForEach-Object { Write-Output "  $_" }
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "  RESIZE FAILED (exit $LASTEXITCODE). Typical causes: no shadow storage association exists yet for this volume"
+    Write-Output "  (create a shadow copy first), the size is below 1MB, or the volume letter is wrong."
+}
+Write-Output ""
+Write-Output "  === AFTER ==="
+vssadmin list shadowstorage /for=$vol 2>&1 | ForEach-Object { Write-Output "  $_" }
+"""
     },
     {
-        "id": 'rt_vss_create_snapshot',
-        "label": 'Create a VSS Shadow Copy Now (One Volume)',
-        "category": 'Remote Tools',
-        "description": 'Creates a restore point / shadow copy of one volume immediately (works on client and server Windows via WMI)',
+        "id": 'run_dism_restorehealth',
+        "danger": True,
+        "label": 'DISM RestoreHealth (Repair Component Store)',
+        "category": 'Windows Health',
+        "description": 'DISM /Online /Cleanup-Image /RestoreHealth -- repairs a corrupt component store from Windows Update; can take 10-30 min (runs detached, tool waits)',
+        "long": True,
+        "command": r"""
+Write-Output "  Running DISM RestoreHealth (needs the target to reach Windows Update or a repair source)..."
+DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+Write-Output "  DISM exit code: $LASTEXITCODE  (0 = success, 3010 = success but reboot needed)"
+Write-Output "  Tip: run 'Run System File Checker (SFC)' afterwards."
+"""
+    },
+    {
+        "id": 'dism_component_cleanup',
+        "danger": True,
+        "label": 'DISM Component Store Cleanup (WinSxS)',
+        "category": 'Windows Health',
+        "description": 'DISM /AnalyzeComponentStore then /StartComponentCleanup -- reclaims space from superseded updates (optionally /ResetBase)',
+        "long": True,
         "params": [
-            {'key': 'VOLUME', 'kind': 'drive', 'label': 'Volume (drive letter)', 'required': True, 'default': 'C'},
+            {'key': 'RESET_BASE', 'kind': 'bool', 'label': 'Also /ResetBase (permanent: installed updates can no longer be uninstalled)', 'required': True, 'default': 'false', 'help': 'Leave unchecked unless you need the extra space; ResetBase cannot be undone'}
         ],
         "command": r"""
-$vol = ("{{VOLUME}}".TrimEnd(':')).ToUpper() + ':'
-Write-Output "  Creating a shadow copy of $vol ..."
-try {
-    $r = Invoke-CimMethod -ClassName Win32_ShadowCopy -MethodName Create -Arguments @{ Volume = "$vol\"; Context = 'ClientAccessible' } -ErrorAction Stop
-    if ($r.ReturnValue -eq 0) { Write-Output "  Created. Shadow ID: $($r.ShadowID)" }
-    else { Write-Output "  Failed, WMI return code $($r.ReturnValue) (1=access denied, 2=invalid arg, 4=unsupported volume, 5=insufficient storage, 6=max copies reached, 9=not enough free space)." }
-} catch { Write-Output "  Failed: $($_.Exception.Message)" }
-""",
-        "danger": False,
-    },
-    {
-        "id": 'perf_dism_analyze_store',
-        "label": 'DISM: Analyze Component Store (Reclaimable Space)',
-        "category": 'Performance',
-        "description": 'Dism /Online /Cleanup-Image /AnalyzeComponentStore -- read-only; says whether a cleanup is worthwhile and how much WinSxS can be reclaimed',
-        "command": r"""
-function Run-Dism([string[]]$a) {
-    Write-Output "  > Dism.exe $($a -join ' ')"
-    $o = & Dism.exe @a 2>&1 | Out-String
-    foreach ($ln in ($o -split "[\r\n]+")) {
-        $t = $ln.Trim()
-        if ($t -and $t -notmatch '^\[[= ]*[\d\.]+%[= ]*\]$') { Write-Output "    $t" }
-    }
-    Write-Output "    (exit code $LASTEXITCODE)"
-}
-
-Write-Output "  === COMPONENT STORE ANALYSIS (read-only) ==="
-Run-Dism @('/Online','/Cleanup-Image','/AnalyzeComponentStore')
-""",
-        "danger": False,
-        "detached": True,
-        "wait_sec": 1800,
-    },
-    {
-        "id": 'perf_dism_component_cleanup',
-        "label": 'DISM: Component Store Cleanup (StartComponentCleanup)',
-        "category": 'Performance',
-        "description": 'Dism /Online /Cleanup-Image /StartComponentCleanup -- removes superseded component versions from WinSxS. Safe; updates stay uninstallable. Can take many minutes',
-        "command": r"""
-function Run-Dism([string[]]$a) {
-    Write-Output "  > Dism.exe $($a -join ' ')"
-    $o = & Dism.exe @a 2>&1 | Out-String
-    foreach ($ln in ($o -split "[\r\n]+")) {
-        $t = $ln.Trim()
-        if ($t -and $t -notmatch '^\[[= ]*[\d\.]+%[= ]*\]$') { Write-Output "    $t" }
-    }
-    Write-Output "    (exit code $LASTEXITCODE)"
-}
-
-$drv = Get-PSDrive C -ErrorAction SilentlyContinue
-if ($drv) { $before = $drv.Free }
-Write-Output "  === COMPONENT STORE CLEANUP ==="
-Run-Dism @('/Online','/Cleanup-Image','/StartComponentCleanup')
-$drv = Get-PSDrive C -ErrorAction SilentlyContinue
-if ($drv -and $before) { Write-Output ("  C: free space change: {0:N0} MB" -f (($drv.Free - $before)/1MB)) }
-""",
-        "danger": False,
-        "detached": True,
-        "wait_sec": 3600,
-    },
-    {
-        "id": 'perf_dism_resetbase',
-        "label": 'DISM: Deep Cleanup (StartComponentCleanup /ResetBase)',
-        "category": 'Performance',
-        "description": 'Dism ... /StartComponentCleanup /ResetBase -- reclaims the most WinSxS space BUT already-installed updates can no longer be uninstalled',
-        "command": r"""
-function Run-Dism([string[]]$a) {
-    Write-Output "  > Dism.exe $($a -join ' ')"
-    $o = & Dism.exe @a 2>&1 | Out-String
-    foreach ($ln in ($o -split "[\r\n]+")) {
-        $t = $ln.Trim()
-        if ($t -and $t -notmatch '^\[[= ]*[\d\.]+%[= ]*\]$') { Write-Output "    $t" }
-    }
-    Write-Output "    (exit code $LASTEXITCODE)"
-}
-
-Write-Output "  === DEEP COMPONENT CLEANUP (/ResetBase) -- installed updates become permanent ==="
-Run-Dism @('/Online','/Cleanup-Image','/StartComponentCleanup','/ResetBase')
-""",
-        "danger": True,
-        "detached": True,
-        "wait_sec": 3600,
-    },
-    {
-        "id": 'perf_dism_health_scan',
-        "label": 'DISM: Image Health Check + Scan (CheckHealth, ScanHealth)',
-        "category": 'Performance',
-        "description": "Dism /CheckHealth then /ScanHealth -- detects Windows image corruption without changing anything (RestoreHealth is 'Run DISM' under Windows Health)",
-        "command": r"""
-function Run-Dism([string[]]$a) {
-    Write-Output "  > Dism.exe $($a -join ' ')"
-    $o = & Dism.exe @a 2>&1 | Out-String
-    foreach ($ln in ($o -split "[\r\n]+")) {
-        $t = $ln.Trim()
-        if ($t -and $t -notmatch '^\[[= ]*[\d\.]+%[= ]*\]$') { Write-Output "    $t" }
-    }
-    Write-Output "    (exit code $LASTEXITCODE)"
-}
-
-Write-Output "  === IMAGE HEALTH (read-only) ==="
-Run-Dism @('/Online','/Cleanup-Image','/CheckHealth')
-Run-Dism @('/Online','/Cleanup-Image','/ScanHealth')
-""",
-        "danger": False,
-        "detached": True,
-        "wait_sec": 3600,
-    },
-    {
-        "id": 'perf_wmi_repo_check',
-        "label": 'WMI: Verify Repository + CIM Performance Snapshot (WMIC replacement)',
-        "category": 'Performance',
-        "description": 'winmgmt /verifyrepository plus a CIM snapshot of CPU, memory, page file, disks and top memory users. WMIC is removed on new Windows, so this uses CIM',
-        "command": r"""
-Write-Output "  === WMI REPOSITORY ==="
-$v = (winmgmt /verifyrepository 2>&1 | Out-String).Trim()
-Write-Output "  $v"
+$resetBase = {{RESET_BASE}}
+Write-Output "  === ANALYZE COMPONENT STORE ==="
+DISM /Online /Cleanup-Image /AnalyzeComponentStore 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
 Write-Output ""
-Write-Output "  === CIM SNAPSHOT (what WMIC used to show) ==="
-$os  = Get-CimInstance Win32_OperatingSystem
-$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-Write-Output ("  OS            : {0}  build {1}" -f $os.Caption, $os.BuildNumber)
-Write-Output ("  Uptime        : {0:N1} days" -f ((Get-Date) - $os.LastBootUpTime).TotalDays)
-Write-Output ("  CPU           : {0}  ({1} cores / {2} logical)  load {3}%" -f $cpu.Name.Trim(), $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors, $cpu.LoadPercentage)
-Write-Output ("  Memory        : {0:N1} GB free of {1:N1} GB" -f ($os.FreePhysicalMemory/1MB), ($os.TotalVisibleMemorySize/1MB))
-foreach ($p in (Get-CimInstance Win32_PageFileUsage)) { Write-Output ("  Page file     : {0}  {1} MB used of {2} MB (peak {3})" -f $p.Name, $p.CurrentUsage, $p.AllocatedBaseSize, $p.PeakUsage) }
-Write-Output ("  Auto page file: {0}" -f (Get-CimInstance Win32_ComputerSystem).AutomaticManagedPagefile)
-foreach ($d in (Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3")) { Write-Output ("  Disk {0}        : {1:N1} GB free of {2:N1} GB" -f $d.DeviceID, ($d.FreeSpace/1GB), ($d.Size/1GB)) }
-Write-Output "  Top 8 processes by working set:"
-Get-CimInstance Win32_Process | Sort-Object WorkingSetSize -Descending | Select-Object -First 8 | ForEach-Object { Write-Output ("    {0,-28} {1,8:N0} MB   PID {2}" -f $_.Name, ($_.WorkingSetSize/1MB), $_.ProcessId) }
-if (Get-Command wmic.exe -ErrorAction SilentlyContinue) { Write-Output ""; Write-Output "  (wmic.exe is present on this target; CIM above is the supported replacement.)" }
-else { Write-Output ""; Write-Output "  (wmic.exe is not installed on this target -- expected on current Windows; CIM covers everything above.)" }
-""",
-        "danger": False,
-    },
-    {
-        "id": 'perf_wmi_repo_repair',
-        "label": 'WMI: Salvage / Repair Repository',
-        "category": 'Performance',
-        "description": 'winmgmt /salvagerepository (then /resetrepository only if still inconsistent and you re-run with it). Fixes slow or broken WMI/CIM queries. Restarts the WMI service',
-        "command": r"""
-Write-Output "  Verifying WMI repository..."
-$v = (winmgmt /verifyrepository 2>&1 | Out-String).Trim()
-Write-Output "  $v"
-if ($v -match 'consistent' -and $v -notmatch 'not consistent|inconsistent') {
-    Write-Output "  Repository is consistent -- nothing to repair."
-    return
+if ($resetBase) {
+    Write-Output "  === START COMPONENT CLEANUP /ResetBase ==="
+    DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+} else {
+    Write-Output "  === START COMPONENT CLEANUP ==="
+    DISM /Online /Cleanup-Image /StartComponentCleanup 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
 }
-Write-Output "  Repository is NOT consistent -- salvaging..."
-$s = (winmgmt /salvagerepository 2>&1 | Out-String).Trim()
-Write-Output "  $s"
-Start-Sleep -Seconds 3
-$v2 = (winmgmt /verifyrepository 2>&1 | Out-String).Trim()
-Write-Output "  After salvage: $v2"
-""",
-        "danger": True,
+Write-Output "  DISM exit code: $LASTEXITCODE"
+"""
     },
     {
-        "id": 'perf_rebuild_perf_counters',
-        "label": 'Rebuild Performance Counters (lodctr /R) + Resync WMI Perf',
+        "id": 'perf_hardware_report_cim',
+        "danger": False,
+        "label": 'Hardware Inventory via CIM (WMIC Replacement)',
         "category": 'Performance',
-        "description": 'lodctr /R, winmgmt /resyncperf, wmiadap /f -- fixes missing or corrupt Task Manager / PerfMon counters',
+        "description": "CPU, RAM modules, disks, BIOS, GPU, board -- what 'wmic cpu/memorychip/diskdrive/bios get' used to show (WMIC is removed on Win11 24H2+)",
         "command": r"""
-Write-Output "  Rebuilding performance counter registry (lodctr /R)..."
-lodctr /R 2>&1 | ForEach-Object { Write-Output "  $_" }
-Write-Output "  Re-syncing WMI performance classes..."
-winmgmt /resyncperf 2>&1 | ForEach-Object { Write-Output "  $_" }
-wmiadap.exe /f 2>&1 | ForEach-Object { Write-Output "  $_" }
-Write-Output "  Done. Counters are re-registered; a restart makes it fully clean."
-""",
-        "danger": True,
+Write-Output "  === CPU ==="
+Get-CimInstance Win32_Processor | ForEach-Object { Write-Output "  $($_.Name.Trim())  cores=$($_.NumberOfCores) threads=$($_.NumberOfLogicalProcessors) maxMHz=$($_.MaxClockSpeed) load=$($_.LoadPercentage)%" }
+Write-Output "  === MEMORY MODULES ==="
+Get-CimInstance Win32_PhysicalMemory | ForEach-Object { Write-Output "  $($_.DeviceLocator): $([math]::Round($_.Capacity/1GB,1)) GB  $($_.Speed) MHz  $($_.Manufacturer)" }
+$os = Get-CimInstance Win32_OperatingSystem
+Write-Output "  RAM free now: $([math]::Round($os.FreePhysicalMemory/1MB,2)) GB of $([math]::Round($os.TotalVisibleMemorySize/1MB,2)) GB"
+Write-Output "  === DISKS ==="
+Get-CimInstance Win32_DiskDrive | ForEach-Object { Write-Output "  $($_.Model)  $([math]::Round($_.Size/1GB,0)) GB  status=$($_.Status)  iface=$($_.InterfaceType)" }
+Write-Output "  === BIOS / BOARD ==="
+$b = Get-CimInstance Win32_BIOS; Write-Output "  BIOS: $($b.Manufacturer) $($b.SMBIOSBIOSVersion)  serial=$($b.SerialNumber)"
+$bb = Get-CimInstance Win32_BaseBoard; Write-Output "  Board: $($bb.Manufacturer) $($bb.Product)"
+Write-Output "  === GPU ==="
+Get-CimInstance Win32_VideoController | ForEach-Object { Write-Output "  $($_.Name)  driver=$($_.DriverVersion)" }
+"""
     },
     {
         "id": 'perf_trim_ssd',
-        "label": 'Retrim SSD Volumes (Optimize-Volume -ReTrim)',
+        "danger": False,
+        "label": 'Retrim an SSD Volume (Optimize-Volume -ReTrim)',
         "category": 'Performance',
-        "description": 'Sends TRIM for every fixed NTFS volume on SSD media so the drive can reclaim free blocks. HDDs are skipped',
+        "description": 'Optimize-Volume -ReTrim -- tells the SSD which blocks are free (skips safely on HDDs)',
+        "params": [
+            {'key': 'VOLUME', 'kind': 'drive', 'label': 'Drive letter', 'required': True, 'default': 'C'}
+        ],
         "command": r"""
-$any = $false
-foreach ($v in (Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -eq 'NTFS' })) {
-    $media = $null
-    try { $media = (Get-Partition -DriveLetter $v.DriveLetter -ErrorAction Stop | Get-Disk -ErrorAction Stop | Get-PhysicalDisk -ErrorAction Stop).MediaType } catch {}
-    if ($media -eq 'SSD') {
-        $any = $true
-        Write-Output "  $($v.DriveLetter): SSD -- retrim..."
-        try { Optimize-Volume -DriveLetter $v.DriveLetter -ReTrim -ErrorAction Stop; Write-Output "  $($v.DriveLetter): retrim complete" }
-        catch { Write-Output "  $($v.DriveLetter): failed -- $($_.Exception.Message)" }
-    } else { Write-Output "  $($v.DriveLetter): media type '$media' -- skipped (not SSD)" }
-}
-if (-not $any) { Write-Output "  No SSD volumes found -- nothing to trim." }
-""",
-        "danger": False,
-        "detached": True,
-        "wait_sec": 1800,
+$vol = "{{VOLUME}}".TrimEnd(':')
+$v = Get-Volume -DriveLetter $vol -ErrorAction SilentlyContinue
+if (-not $v) { Write-Output "  Volume $vol`: not found."; return }
+$part = Get-Partition -DriveLetter $vol -ErrorAction SilentlyContinue
+$disk = if ($part) { Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object { $_.DeviceId -eq $part.DiskNumber } } else { $null }
+Write-Output "  Volume $vol`: media type = $(if ($disk) { $disk.MediaType } else { 'unknown' })"
+if ($disk -and $disk.MediaType -eq 'HDD') { Write-Output "  This is a spinning disk -- ReTrim does not apply. Use 'Defragment' instead. Nothing done."; return }
+Optimize-Volume -DriveLetter $vol -ReTrim -ErrorAction SilentlyContinue -Verbose 4>&1 | ForEach-Object { Write-Output "  $_" }
+Write-Output "  Retrim finished."
+"""
     },
     {
-        "id": 'perf_pagefile_system_managed',
-        "label": 'Page File: Switch to System-Managed Size',
+        "id": 'perf_wmi_verify_repository',
+        "danger": False,
+        "label": 'Verify WMI Repository Health (winmgmt)',
         "category": 'Performance',
-        "description": 'Sets AutomaticManagedPagefile = True so Windows sizes the page file itself (fixes a too-small / fixed page file). Takes effect after a restart',
+        "description": 'winmgmt /verifyrepository -- a corrupt WMI repository makes CIM/WMI-based operations and monitoring slow or failing (read-only check)',
         "command": r"""
-$cs = Get-CimInstance Win32_ComputerSystem
-Write-Output "  Automatic page-file management is currently: $($cs.AutomaticManagedPagefile)"
-if ($cs.AutomaticManagedPagefile) { Write-Output "  Already system-managed -- nothing to change."; return }
-try {
-    Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile = $true } -ErrorAction Stop
-    Write-Output "  Switched to system-managed. Restart the target for it to take effect."
-} catch { Write-Output "  Failed: $($_.Exception.Message)" }
-""",
+Write-Output "  Verifying the WMI repository (read-only)..."
+$r = winmgmt /verifyrepository 2>&1
+$r | ForEach-Object { Write-Output "  $_" }
+if (($r | Out-String) -match 'inconsistent') { Write-Output "  Repository is INCONSISTENT -- consider 'winmgmt /salvagerepository' on the target (Admin), then a restart." }
+"""
+    },
+    {
+        "id": 'perf_rebuild_perf_counters',
         "danger": True,
+        "label": 'Rebuild Performance Counters (lodctr /R)',
+        "category": 'Performance',
+        "description": 'lodctr /R -- rebuilds a corrupt performance-counter registry (fixes empty/blank Task Manager, perfmon and monitoring-agent counters)',
+        "command": r"""
+Write-Output "  Rebuilding performance counters (lodctr /R)..."
+$r = lodctr /R 2>&1
+$r | ForEach-Object { Write-Output "  $_" }
+Write-Output "  Re-syncing with WMI performance adapter..."
+winmgmt /resyncperf 2>&1 | ForEach-Object { Write-Output "  $_" }
+Write-Output "  Done. Monitoring tools may need a restart to pick the counters up."
+"""
     },
     {
-        "id": 'rc_computer_mgmt',
-        "label": 'Open Computer Management on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- compmgmt.msc -- users, services, disks, event viewer in one console",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'compmgmt.msc'
-$label = 'Computer Management'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'chkdsk_online_scan',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_device_mgr',
-        "label": 'Open Device Manager on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- devmgmt.msc -- drivers and hardware",
+        "label": 'CHKDSK Online Scan (Read-Only)',
+        "category": 'Disk',
+        "description": 'chkdsk X: /scan -- online, read-only scan of a volume for file-system errors (no dismount, no repair; runs detached, tool waits)',
+        "long": True,
+        "params": [
+            {'key': 'VOLUME', 'kind': 'drive', 'label': 'Drive letter', 'required': True, 'default': 'C'}
+        ],
         "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'devmgmt.msc'
-$label = 'Device Manager'
+$vol = "{{VOLUME}}"
+Write-Output "  Online read-only scan of $vol (this can take several minutes)..."
+chkdsk $vol /scan 2>&1 | ForEach-Object { if ($_ -and "$_".Trim()) { Write-Output "  $_" } }
+Write-Output "  chkdsk exit code: $LASTEXITCODE  (0 = no errors, 1 = errors found/fixed, 2/3 = cleanup needed)"
+"""
+    },
 
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+    # ─── 🖥️ ADMIN CONSOLES (v3.7) ───────────────────────────────────────────
+    {
+        "id": 'rt_open_computer_management',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Computer Management (Connected to Target)',
+        "category": 'Admin Consoles',
+        "description": 'mmc compmgmt.msc /computer:\\\\<target> -- Disk Management, Device Manager (read-only), Event Viewer, Services, Shared Folders, Task Scheduler in one console',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_disk_mgmt',
-        "label": 'Open Disk Management on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- diskmgmt.msc -- partitions, volumes, drive letters",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'diskmgmt.msc'
-$label = 'Disk Management'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_disk_management',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Disk Management (Connected to Target)',
+        "category": 'Admin Consoles',
+        "description": 'mmc diskmgmt.msc /computer:\\\\<target> -- partitions, volumes, drive letters, extend/shrink',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_defrag_gui',
-        "label": 'Open Defragment and Optimize Drives (dfrgui) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- dfrgui.exe -- analyze / optimize / retrim drives with the GUI",
-        "command": r"""
-$exe   = 'dfrgui.exe'
-$argl  = ''
-$label = 'Defragment and Optimize Drives (dfrgui)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_device_manager',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Device Manager (Connected to Target, Read-Only on Win8+)',
+        "category": 'Admin Consoles',
+        "description": 'mmc devmgmt.msc /computer:\\\\<target> -- Windows 8 / Server 2012 and later only let you VIEW remote devices; use Remote Desktop to change drivers',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_disk_cleanup',
-        "label": 'Open Disk Cleanup (cleanmgr) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- cleanmgr.exe -- the classic Disk Cleanup window",
-        "command": r"""
-$exe   = 'cleanmgr.exe'
-$argl  = ''
-$label = 'Disk Cleanup (cleanmgr)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_services',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Services Console (Connected to Target)',
+        "category": 'Admin Consoles',
+        "description": 'mmc services.msc /computer:\\\\<target> -- start/stop/configure services on the target',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_services',
-        "label": 'Open Services Console on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- services.msc",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'services.msc'
-$label = 'Services Console'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_event_viewer',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Event Viewer (Connected to Target)',
+        "category": 'Admin Consoles',
+        "description": "mmc eventvwr.msc /computer:<target> -- browse the target's Windows logs",
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_event_viewer',
-        "label": 'Open Event Viewer on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- eventvwr.msc",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'eventvwr.msc'
-$label = 'Event Viewer'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_shared_folders',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Shared Folders Console (Connected to Target)',
+        "category": 'Admin Consoles',
+        "description": 'mmc fsmgmt.msc /computer:\\\\<target> -- shares, open sessions, open files',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_task_scheduler',
-        "label": 'Open Task Scheduler on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- taskschd.msc",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'taskschd.msc'
-$label = 'Task Scheduler'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_admin_share',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open C$ Admin Share in File Explorer',
+        "category": 'Admin Consoles',
+        "description": "explorer \\\\<target>\\C$ -- browse the target's system drive using the supplied admin credentials",
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_local_users',
-        "label": 'Open Local Users and Groups on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- lusrmgr.msc (not on Home editions)",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'lusrmgr.msc'
-$label = 'Local Users and Groups'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_firewall',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Windows Firewall with Advanced Security (Guided)',
+        "category": 'Admin Consoles',
+        "description": 'wf.msc has no remote switch -- opens the console and tells you the 3 clicks to connect it to the target',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_shared_folders',
-        "label": 'Open Shared Folders on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- fsmgmt.msc -- shares, sessions, open files",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'fsmgmt.msc'
-$label = 'Shared Folders'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_remote_shell',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Remote PowerShell Window on Target (Enter-PSSession)',
+        "category": 'Admin Consoles',
+        "description": 'New PowerShell window already connected to the target -- run any admin command (cleanmgr /sagerun, defrag, netsh, ...) there',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_firewall_adv',
-        "label": 'Open Windows Defender Firewall with Advanced Security on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- wf.msc -- inbound/outbound rules",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'wf.msc'
-$label = 'Windows Defender Firewall with Advanced Security'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_remote_cmd',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+        "label": 'Open Remote Command Prompt on Target (winrs)',
+        "category": 'Admin Consoles',
+        "description": 'New cmd window running on the target through WinRM (winrs) -- asks for the password in that window',
+        "command": r"""
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
     {
-        "id": 'rc_net_connections',
-        "label": 'Open Network Connections (Network Adapters) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- ncpa.cpl -- adapter properties, IPv4 settings",
-        "command": r"""
-$exe   = 'control.exe'
-$argl  = 'ncpa.cpl'
-$label = 'Network Connections (Network Adapters)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
+        "id": 'ac_open_rdp',
         "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_task_manager',
-        "label": 'Open Task Manager on Target',
+        "label": 'Open Remote Desktop to Target (Credentials Pre-Loaded)',
         "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- taskmgr.exe",
+        "description": 'mstsc /v:<target> with the supplied credentials stored -- the only way to use GUI-only tools remotely: Device Manager (full), Disk Cleanup, Defrag, Firewall, Network Connections',
         "command": r"""
-$exe   = 'taskmgr.exe'
-$argl  = ''
-$label = 'Task Manager'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_resource_monitor',
-        "label": 'Open Resource Monitor on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- resmon.exe -- CPU / memory / disk / network per process",
-        "command": r"""
-$exe   = 'resmon.exe'
-$argl  = ''
-$label = 'Resource Monitor'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_perfmon',
-        "label": 'Open Performance Monitor on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- perfmon.msc",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'perfmon.msc'
-$label = 'Performance Monitor'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_sys_properties',
-        "label": 'Open System Properties (Advanced / Computer Name) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- sysdm.cpl",
-        "command": r"""
-$exe   = 'control.exe'
-$argl  = 'sysdm.cpl'
-$label = 'System Properties (Advanced / Computer Name)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_programs',
-        "label": 'Open Programs and Features on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- appwiz.cpl -- uninstall programs",
-        "command": r"""
-$exe   = 'control.exe'
-$argl  = 'appwiz.cpl'
-$label = 'Programs and Features'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_power_options',
-        "label": 'Open Power Options on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- powercfg.cpl",
-        "command": r"""
-$exe   = 'control.exe'
-$argl  = 'powercfg.cpl'
-$label = 'Power Options'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_control_panel',
-        "label": 'Open Control Panel on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- control.exe",
-        "command": r"""
-$exe   = 'control.exe'
-$argl  = ''
-$label = 'Control Panel'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_msconfig',
-        "label": 'Open System Configuration (msconfig) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- msconfig.exe -- boot and startup options",
-        "command": r"""
-$exe   = 'msconfig.exe'
-$argl  = ''
-$label = 'System Configuration (msconfig)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_cert_mgr',
-        "label": 'Open Certificates (Local Computer) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- certlm.msc",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'certlm.msc'
-$label = 'Certificates (Local Computer)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_gpedit',
-        "label": 'Open Local Group Policy Editor on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- gpedit.msc (not on Home editions)",
-        "command": r"""
-$exe   = 'mmc.exe'
-$argl  = 'gpedit.msc'
-$label = 'Local Group Policy Editor'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_win_update',
-        "label": 'Open Windows Update Settings on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- ms-settings:windowsupdate",
-        "command": r"""
-$exe   = 'explorer.exe'
-$argl  = 'ms-settings:windowsupdate'
-$label = 'Windows Update Settings'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": False,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_powershell',
-        "label": 'Open PowerShell Window (Elevated) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- powershell.exe -NoExit -- an interactive admin shell on the target's screen",
-        "command": r"""
-$exe   = 'powershell.exe'
-$argl  = '-NoExit'
-$label = 'PowerShell Window (Elevated)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": True,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_cmd',
-        "label": 'Open Command Prompt (Elevated) on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- cmd.exe -- an interactive admin shell on the target's screen",
-        "command": r"""
-$exe   = 'cmd.exe'
-$argl  = ''
-$label = 'Command Prompt (Elevated)'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": True,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
-    },
-    {
-        "id": 'rc_regedit',
-        "label": 'Open Registry Editor on Target',
-        "category": 'Admin Consoles',
-        "description": "Opens on the TARGET's screen (not yours) using the admin credentials you entered -- regedit.exe -- edits the target's registry",
-        "command": r"""
-$exe   = 'regedit.exe'
-$argl  = ''
-$label = 'Registry Editor'
-
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$consoleUser = $cs.UserName
-if (-not $consoleUser) {
-    Write-Output "  Nobody is signed in at the target's physical console (a Remote Desktop-only session does not count)."
-    Write-Output "  There is no screen to open $label on -- sign in at the target, then run this again."
-    return
-}
-Write-Output "  Console session user : $consoleUser"
-
-$full = $exe
-$gc = Get-Command $exe -ErrorAction SilentlyContinue
-if ($gc -and $gc.Source) { $full = $gc.Source }
-elseif (-not [IO.Path]::IsPathRooted($exe)) { $full = Join-Path $env:SystemRoot ('System32\' + $exe) }
-$cmdText = if ($argl) { "$full $argl" } else { $full }
-Write-Output "  Launching            : $cmdText"
-
-if (-not ('PCAConsole' -as [type])) {
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class PCAConsole {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-        public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars;
-        public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2;
-        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-    struct PROFILEINFO { public int dwSize; public int dwFlags; public string lpUserName; public string lpProfilePath;
-        public string lpDefaultPath; public string lpServerName; public string lpPolicyPath; public IntPtr hProfile; }
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LogonUser(string u, string d, string p, int type, int prov, out IntPtr tok);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool DuplicateTokenEx(IntPtr h, uint acc, IntPtr attr, int lvl, int type, out IntPtr nt);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool GetTokenInformation(IntPtr t, int cls, IntPtr info, int len, out int ret);
-    [DllImport("advapi32.dll", SetLastError=true)]
-    static extern bool SetTokenInformation(IntPtr t, int cls, IntPtr info, int len);
-    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool CreateProcessAsUser(IntPtr tok, string app, string cmd, IntPtr pa, IntPtr ta, bool inh,
-        uint flags, IntPtr env, string cwd, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
-    [DllImport("userenv.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern bool LoadUserProfile(IntPtr tok, ref PROFILEINFO pi);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr tok, bool inh);
-    [DllImport("userenv.dll", SetLastError=true)]
-    static extern bool DestroyEnvironmentBlock(IntPtr env);
-    [DllImport("kernel32.dll")]
-    static extern uint WTSGetActiveConsoleSessionId();
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool CloseHandle(IntPtr h);
-
-    public static string Launch(string account, string password, string app, string args) {
-        string domain = null, user = account;
-        int i = account.IndexOf('\\');
-        if (i > 0) { domain = account.Substring(0, i); user = account.Substring(i + 1); }
-        else if (account.IndexOf('@') < 0) { domain = "."; }
-        IntPtr tok = IntPtr.Zero, prim = IntPtr.Zero, env = IntPtr.Zero;
-        try {
-            if (!LogonUser(user, domain, password, 2, 0, out tok))
-                return "LogonUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            IntPtr src = tok;
-            IntPtr buf = Marshal.AllocHGlobal(IntPtr.Size);
-            int ret;
-            if (GetTokenInformation(tok, 19, buf, IntPtr.Size, out ret)) {
-                IntPtr linked = Marshal.ReadIntPtr(buf);
-                if (linked != IntPtr.Zero) src = linked;
-            }
-            Marshal.FreeHGlobal(buf);
-            if (!DuplicateTokenEx(src, 0x02000000, IntPtr.Zero, 2, 1, out prim))
-                return "DuplicateTokenEx failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            uint sess = WTSGetActiveConsoleSessionId();
-            if (sess == 0xFFFFFFFF) return "no active console session";
-            IntPtr p = Marshal.AllocHGlobal(4);
-            Marshal.WriteInt32(p, (int)sess);
-            bool okSess = SetTokenInformation(prim, 12, p, 4);
-            int errSess = Marshal.GetLastWin32Error();
-            Marshal.FreeHGlobal(p);
-            if (!okSess) return "SetTokenInformation(session) failed (Win32 error " + errSess + ")";
-            PROFILEINFO pf = new PROFILEINFO();
-            pf.dwSize = Marshal.SizeOf(typeof(PROFILEINFO));
-            pf.lpUserName = user;
-            LoadUserProfile(prim, ref pf);
-            if (!CreateEnvironmentBlock(out env, prim, false)) env = IntPtr.Zero;
-            STARTUPINFO si = new STARTUPINFO();
-            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-            si.lpDesktop = "winsta0\\default";
-            PROCESS_INFORMATION pi;
-            string cmd = "\"" + app + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args);
-            string cwd = Environment.GetEnvironmentVariable("SystemRoot") + "\\System32";
-            if (!CreateProcessAsUser(prim, null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0x410, env, cwd, ref si, out pi))
-                return "CreateProcessAsUser failed (Win32 error " + Marshal.GetLastWin32Error() + ")";
-            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-            return "OK pid=" + pi.dwProcessId + " console-session=" + sess;
-        } finally {
-            if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
-            if (prim != IntPtr.Zero) CloseHandle(prim);
-            if (tok != IntPtr.Zero) CloseHandle(tok);
-        }
-    }
-}
-'@ -ErrorAction Stop
-}
-
-$res = 'not attempted'
-try { $res = [PCAConsole]::Launch($__u, $__p, $full, $argl) } catch { $res = "exception: $($_.Exception.Message)" }
-if ($res -like 'OK*') {
-    Start-Sleep -Seconds 2
-    $pidv = [int](($res -split 'pid=')[1] -split ' ')[0]
-    if (Get-Process -Id $pidv -ErrorAction SilentlyContinue) { Write-Output "  OPENED on the target's screen as $__u  ($res)" }
-    else { Write-Output "  Started as $__u ($res); the program has already handed off to another process or closed -- check the target's screen." }
-    return
-}
-Write-Output "  Launch as the supplied admin account did not work: $res"
-Write-Output "  Falling back to the account signed in at the console ($consoleUser)..."
-try {
-    $tn = 'PCAdminTool_UI_' + [guid]::NewGuid().ToString('N').Substring(0,8)
-    if ($argl) { $a = New-ScheduledTaskAction -Execute $full -Argument $argl } else { $a = New-ScheduledTaskAction -Execute $full }
-    $p = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Force | Out-Null
-    Start-ScheduledTask -TaskName $tn
-    Start-Sleep -Seconds 3
-    Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "  OPENED on the target's screen as $consoleUser (fallback). It is only elevated if that account is a local administrator."
-} catch { Write-Output "  Fallback failed too: $($_.Exception.Message)" }
-""",
-        "danger": True,
-        "needs_cred": True,
-        "detached": True,
-        "wait_sec": 90,
+# Handled by the host application (launch_console) -- never sent to the target.
+Write-Output "  (local console launcher)"
+"""
     },
 ]
 
-# v3.7 -- flags consumed by the resilient execution engine (see the
-# "v3.7 RESILIENT EXECUTION ENGINE" block). Operations that bounce the
-# target's network run as a detached job and are polled until it answers.
-_NET_DISRUPTIVE_IDS = {'flush_dns',
- 'pr_disable_enable_adapter',
- 'pr_restart_all_adapters',
- 'pr_restart_named_adapter',
- 'reset_network',
- 'rt_set_dhcp',
- 'rt_set_static_ip'}
-for _op in OPERATIONS:
-    if _op["id"] in _NET_DISRUPTIVE_IDS:
-        _op["net_disruptive"] = True
-        _op["detached"] = True
-        _op.setdefault("wait_sec", 300)
-assert _NET_DISRUPTIVE_IDS <= {o["id"] for o in OPERATIONS}, "net-disruptive id missing"
+# ── v3.8 (DC-45): "Network Push" category ────────────────────────────────────
+# Same bodies as the proven network tasks, but the tool only PUSHES the command and
+# does not wait for the result (push_run). "Ping Host" watches the target until Stop.
+def _np_clone(src_id, new_id, label, description, command=None):
+    src = next(o for o in OPERATIONS if o["id"] == src_id)
+    o = dict(src)
+    o.update({"id": new_id, "label": label, "category": "Network Push",
+              "description": description, "danger": True})
+    o["params"] = [dict(p) for p in src.get("params", [])]
+    if command is not None:
+        o["command"] = command
+    if not o["params"]:
+        o.pop("params")
+    return o
+
+_NP_STATIC_BODY = r"""
+$adapterName = "{{ADAPTER}}"
+$ip = "{{IP}}"
+$mask = "{{MASK}}"
+$gw = "{{GATEWAY}}"
+$dns1 = "{{DNS1}}"
+$dns2 = "{{DNS2}}"
+
+$nic = Get-NetAdapter -Name $adapterName -ErrorAction SilentlyContinue
+if (-not $nic) {
+    Write-Output "  Adapter '$adapterName' not found. Available adapters:"
+    Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "    $($_.Name)" }
+    return
+}
+
+$prefix = 0
+foreach ($o in $mask.Split('.')) { $prefix += ([Convert]::ToString([int]$o, 2).ToCharArray() | Where-Object { $_ -eq '1' }).Count }
+
+function Get-Missing {
+    $m = @()
+    $a = Get-NetIPAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $ip } | Select-Object -First 1
+    if (-not $a) { $m += 'IP address' }
+    elseif ($a.PrefixLength -ne $prefix) { $m += 'subnet mask' }
+    $c = Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue
+    if (-not (@($c.IPv4DefaultGateway.NextHop) -contains $gw)) { $m += 'default gateway' }
+    $d = @((Get-DnsClientServerAddress -InterfaceAlias $adapterName -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
+    if ($dns1 -and $d[0] -ne $dns1) { $m += 'primary DNS' }
+    if ($dns2 -and $d[1] -ne $dns2) { $m += 'secondary DNS' }
+    return $m
+}
+
+function Set-AllAtOnce {
+    # IP + mask + gateway + DNS are pushed back-to-back in ONE pass (no output handling,
+    # no waiting between them) so the connection drop cannot leave a half-applied setup.
+    $o1 = netsh interface ipv4 set address name="$adapterName" static $ip $mask $gw 2>&1
+    $o2 = $null
+    $o3 = $null
+    if ($dns1) { $o2 = netsh interface ipv4 set dnsservers name="$adapterName" static $dns1 primary validate=no 2>&1 }
+    if ($dns2) { $o3 = netsh interface ipv4 add dnsservers name="$adapterName" $dns2 index=2 validate=no 2>&1 }
+    foreach ($x in @($o1) + @($o2) + @($o3)) { if ("$x".Trim()) { Write-Output "  $x" } }
+}
+
+Write-Output "  PUSH: $ip / $mask (/$prefix), gateway $gw, DNS $dns1 $dns2 on '$adapterName' -- everything in one pass"
+Set-AllAtOnce
+if (Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue) {
+    # From here on this only checks and repairs, on the target itself -- it keeps running
+    # even if the admin PC has already lost the connection.
+    $attempt = 1
+    while ($true) {
+        $until = (Get-Date).AddSeconds(12)
+        do {
+            Start-Sleep -Seconds 2
+            $missing = @(Get-Missing)
+        } while ($missing.Count -gt 0 -and (Get-Date) -lt $until)
+        if ($missing.Count -eq 0 -or $attempt -ge 3) { break }
+        $attempt++
+        Write-Output "  Not applied yet: $($missing -join ', ') -- pushing again (attempt $attempt of 3)..."
+        Set-AllAtOnce
+    }
+    if ($missing.Count -eq 0) { Write-Output "  VERIFIED on the target: IP address, subnet mask, gateway and DNS match." }
+    else { Write-Output "  WARNING: still not applied after $attempt attempts: $($missing -join ', ')" }
+}
+Write-Output "  === RESULTING CONFIGURATION ==="
+Get-NetIPConfiguration -InterfaceAlias $adapterName -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Output "  IPv4 Address : $($_.IPv4Address.IPAddress)"
+    Write-Output "  Gateway      : $($_.IPv4DefaultGateway.NextHop)"
+    Write-Output "  DNS Servers  : $($_.DNSServer.ServerAddresses -join ', ')"
+}
+"""
+
+OPERATIONS += [
+    _np_clone("rt_set_static_ip", "np_static_ip", "Push: Set Static IP (no wait)",
+              "Sends IP + mask + gateway + DNS1/DNS2 in ONE pass, then returns immediately: 'Static IP set cmd pushed to the target machine'. Use Ping Host to watch the change.",
+              _NP_STATIC_BODY),
+    _np_clone("rt_set_dhcp", "np_dhcp", "Push: Set DHCP (no wait)",
+              "Switches the adapter to DHCP and returns immediately: 'DHCP set cmd pushed to the target machine'. Use Ping Host to watch the new address appear."),
+    _np_clone("flush_dns", "np_flush_dns", "Push: Flush DNS (no wait)",
+              "Clears the DNS cache + re-registers and returns immediately: 'Flush DNS cmd pushed to the target machine'."),
+    _np_clone("reset_network", "np_reset_tcpip", "Push: Reset TCP/IP & Winsock (no wait)",
+              "Resets Winsock + TCP/IP and returns immediately: 'Reset TCP/IP cmd pushed to the target machine'. A restart is needed afterwards."),
+    {
+        "id": "np_ping_host",
+        "danger": False,
+        "label": "Ping Host (continuous until Stop)",
+        "category": "Network Push",
+        "description": "Pings the target (and its DNS answer, plus up to two extra IPs) every 2 s until you press STOP; prints every change and which IP is LIVE. Needs no WinRM login. Put it LAST in the run order.",
+        "params": [
+            {"key": "WATCH_IP1", "kind": "ipv4", "label": "Also watch this IP (optional, e.g. the NEW static IP)", "required": False},
+            {"key": "WATCH_IP2", "kind": "ipv4", "label": "Also watch a 2nd IP (optional, e.g. the OLD IP)", "required": False},
+        ],
+        "command": r"""
+# Handled by the host application (ping_monitor_gen) -- never sent to the target.
+Write-Output "  (local ping monitor)"
+""",
+    },
+]
 
 # ── Build safe metadata list (no commands) for the browser ───────────────────
 # "danger" and "params" are plain descriptive metadata (no secrets) -- safe to expose.
@@ -6461,8 +3016,6 @@ OPS_META = [
     for o in OPERATIONS
 ]
 OPS_MAP = {o["id"]: o for o in OPERATIONS}
-assert len(OPERATIONS) == 105, f"Expected 105 operations, got {len(OPERATIONS)}"
-assert len({o['id'] for o in OPERATIONS}) == 105, "Duplicate operation id detected"
 CATEGORIES = list(dict.fromkeys(o["category"] for o in OPERATIONS))
 DANGER_IDS = {o["id"] for o in OPERATIONS if o.get("danger")}
 
@@ -6595,21 +3148,6 @@ def _validate_useraccount(raw):
     return raw, None
 
 
-def _validate_vsssize(raw):
-    # v3.7 -- vssadmin /maxsize value: 10GB, 500MB, 2TB, 20% or UNBOUNDED.
-    v = raw.strip().replace(" ", "").upper()
-    m = re.match(r"^(UNBOUNDED|(\d{1,3})%|(\d{1,7})(MB|GB|TB))$", v)
-    if not m:
-        return None, f"'{raw}' is not a valid size (use e.g. 10GB, 500MB, 20% or UNBOUNDED)"
-    if m.group(2) is not None and not (1 <= int(m.group(2)) <= 100):
-        return None, f"'{raw}': a percentage must be 1-100"
-    if m.group(3) is not None:
-        n = int(m.group(3))
-        if n < 1 or (m.group(4) == "MB" and n < 320):
-            return None, f"'{raw}': the minimum VSS size is 320MB"
-    return v, None
-
-
 def _validate_bool(raw):
     # Checkbox param. Returns the literal PowerShell token so the command
     # body can write "$autoRestart = {{AUTO_RESTART}}" and get real $true/
@@ -6622,6 +3160,18 @@ def _validate_bool(raw):
     if v in ("false", "0", "no", "off", ""):
         return "$false", None
     return None, f"'{raw}' is not a valid true/false value"
+
+
+_VSSSIZE_RE = re.compile(r"^(UNBOUNDED|\d{1,3}%|\d{1,9}(KB|MB|GB|TB|PB|EB))$", re.IGNORECASE)
+
+
+def _validate_vsssize(raw):
+    raw = raw.strip().upper().replace(" ", "")
+    if not _VSSSIZE_RE.match(raw):
+        return None, f"'{raw}' is not a valid shadow-storage size (use e.g. 10%, 20GB, 51200MB or UNBOUNDED)"
+    if raw.endswith("%") and not (1 <= int(raw[:-1]) <= 100):
+        return None, "a percentage must be between 1% and 100%"
+    return raw, None
 
 
 PARAM_VALIDATORS = {
@@ -6708,256 +3258,735 @@ def make_session(hostname, username, password, transport="ntlm", fast=False):
         operation_timeout=170,
     )
     if fast:
-        # v3.7: short-lived polling sessions used while a target's network is
-        # changing -- must fail fast instead of hanging for minutes.
-        kwargs.update(connection_timeout=8, read_timeout=25, operation_timeout=15)
+        # Short timeouts for polling/reconnecting while the target's network may be down.
+        kwargs.update(connection_timeout=10, read_timeout=30, operation_timeout=20)
     if transport == "basic":
         kwargs["encryption"] = "never"
     return Client(hostname, **kwargs)
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  v3.7  RESILIENT EXECUTION ENGINE  (kept byte-identical in app.py and
-#  PCAdminTool.pyw -- edit both together)
-#
-#  WHY THIS EXISTS
-#  Before v3.7 every operation ran INSIDE the live WinRM connection. Any
-#  operation that bounces the target's network (set static IP, set DHCP,
-#  flush/re-register DNS, reset TCP/IP, restart adapters) killed the very
-#  connection that was carrying its own output. The client then sat waiting
-#  for a reply that could never arrive (up to 170 s), "reconnected" to a stale
-#  address, and -- worst -- blindly RE-RAN the sensitive operation. The only
-#  way out was restarting this application.
-#
-#  WHAT IT DOES NOW
-#  Operations flagged "net_disruptive" (and long-running ones flagged
-#  "detached") are dispatched as a ONE-SHOT SCHEDULED TASK running as SYSTEM
-#  on the target. The dispatch call returns in about a second, long before the
-#  network changes. The task writes its output to a file on the target
-#  (C:\ProgramData\PCAdminTool, ACL-restricted to SYSTEM + Administrators).
-#  This side then POLLS with short-lived, brand-new sessions -- tolerating
-#  drops -- on every address the target might now have (for Set Static IP that
-#  is the NEW address first), reads the result when the target is back, and
-#  prints it. If the address changed, every following task in the run keeps
-#  using the new one. Nothing is ever re-run automatically.
+#  v3.7  RESILIENCE ENGINE  (network blips, reboots, long tasks, credentials)
 # ══════════════════════════════════════════════════════════════════════════════
-import base64
-import uuid
-
-JOB_DIR = r"C:\ProgramData\PCAdminTool"
-
-_JOB_PREAMBLE = (
-    "$ErrorActionPreference = 'Continue'\n"
-    "$ProgressPreference = 'SilentlyContinue'\n"
-    "$WarningPreference = 'SilentlyContinue'\n"
-)
-
-_WRAPPER_TMPL = r"""
-$ErrorActionPreference = 'Continue'
-$out  = '__OUT__'
-$done = '__DONE__'
-try {
-    Start-Sleep -Seconds 2
-    $txt = [IO.File]::ReadAllText('__INNER__')
-    Remove-Item -LiteralPath '__INNER__' -Force -ErrorAction SilentlyContinue
-    $sb = [scriptblock]::Create($txt)
-    & $sb 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath $out -Encoding utf8 -Append
-    Set-Content -LiteralPath $done -Value 'OK' -Encoding ASCII
-} catch {
-    ('ERROR: ' + $_.Exception.Message) | Out-File -FilePath $out -Encoding utf8 -Append
-    Set-Content -LiteralPath $done -Value 'FAIL' -Encoding ASCII
-} finally {
-    Unregister-ScheduledTask -TaskName '__TASK__' -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath '__WRAP__' -Force -ErrorAction SilentlyContinue
+# Why this exists: an operation that briefly drops the target's network (flush
+# DNS, set static IP, set DHCP, adapter restart, TCP/IP reset) kills the TCP
+# connection under the in-flight WinRM call. The old code then sat on a dead
+# socket (pypsrp retries a read timeout 5 times x 180 s) and the session was
+# never usable again until the app was restarted. Now such operations are
+# started DETACHED on the target (Win32_Process.Create, which lives outside the
+# WinRM shell, so it survives the shell dying), their output goes to a file on
+# the target, and this tool polls with short timeouts, reconnecting with
+# back-off, until the file says "done" -- then returns the real output.
+NETWORK_BLIP_OPS = {
+    "rt_set_static_ip", "rt_set_dhcp", "reset_network", "flush_dns",
+    "pr_restart_all_adapters", "pr_restart_named_adapter", "pr_disable_enable_adapter",
 }
-"""
-
-_LAUNCH_TMPL = r"""
-$ErrorActionPreference = 'Stop'
-try {
-    $d = '__DIR__'
-    if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
-    & icacls.exe $d /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-    $enc = New-Object System.Text.UTF8Encoding($true)
-    [IO.File]::WriteAllText('__INNER__', [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__B64INNER__')), $enc)
-    [IO.File]::WriteAllText('__WRAP__',  [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__B64WRAP__')),  $enc)
-    $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "__WRAP__"'
-    $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
-    Register-ScheduledTask -TaskName '__TASK__' -Action $a -Principal $p -Settings $s -Force | Out-Null
-    Start-ScheduledTask -TaskName '__TASK__'
-    Write-Output 'JOB_STARTED'
-} catch {
-    Write-Output ('JOB_LAUNCH_FAILED: ' + $_.Exception.Message)
-}
-"""
-
-_POLL_TMPL = r"""
-$o  = '__OUT__'
-$dn = '__DONE__'
-if (Test-Path -LiteralPath $dn) {
-    $st = (Get-Content -LiteralPath $dn -Raw).Trim()
-    Write-Output ('__PCA_DONE__:' + $st)
-    if (Test-Path -LiteralPath $o) { Get-Content -LiteralPath $o -Encoding UTF8 }
-    Remove-Item -LiteralPath $o,$dn -Force -ErrorAction SilentlyContinue
-} else {
-    Write-Output '__PCA_PENDING__'
-}
-"""
+REBOOT_OPS = {"pr_force_restart", "pr_force_signout_restart", "pr_full_soft_recycle"}
+CONDITIONAL_REBOOT_OPS = {"rt_rename_pc_domain", "rt_rename_pc_workgroup"}
+REBOOT_MARKERS = ("restarts in 15 seconds", "Restarting the computer now",
+                  "Forcing an immediate restart", "Signing out and restarting now")
+RECONNECT_ATTEMPTS = 8
+RECONNECT_WAIT_SECONDS = 4
+DETACH_BLIP_WAIT = 300      # seconds to wait for a network-changing op to finish + target to return
+DETACH_LONG_WAIT = 3600     # DISM / CHKDSK
+DETACH_POLL_SECONDS = 3
 
 
-def _ps_quote(value):
-    """Single-quoted PowerShell literal (only ' needs escaping)."""
-    return "'" + str(value).replace("'", "''") + "'"
+def _ev(d):
+    return f"data: {json.dumps(d)}\n\n"
 
 
-def inject_credentials(script, username, password):
+def build_cred_prelude(username, password):
     """
-    Prepend $__u / $__p / $__cred to a script for operations flagged
-    "needs_cred". Needed because a WinRM session is a *network* logon: it
-    carries no credentials of its own to a domain controller (the classic
-    double-hop), so anything that must authenticate onward -- a domain
-    computer rename, launching a window as the admin account -- has to be
-    handed the credential explicitly. Sent only inside the encrypted PSRP
-    channel; the script text is never written to the log.
+    PowerShell text that rebuilds the connection's own username/password as a
+    real PSCredential ($__cred) INSIDE the remote session. Needed by domain
+    rename: Rename-Computer -DomainCredential must authenticate to a domain
+    controller itself -- the session's NTLM network logon can't be forwarded
+    (the "double hop"), which is why every rename variant failed with
+    "Access is denied". Values are base64 so no quoting/escaping problem can
+    exist; the script travels inside the encrypted PSRP channel (NTLM/Kerberos/
+    CredSSP message encryption), the password is never printed, logged or
+    placed on any command line.
     """
-    prelude = (
-        "$__u = " + _ps_quote(username) + "\n"
-        "$__p = " + _ps_quote(password) + "\n"
-        "$__cred = New-Object System.Management.Automation.PSCredential("
-        "$__u, (ConvertTo-SecureString $__p -AsPlainText -Force))\n"
+    u = base64.b64encode(username.encode("utf-8")).decode("ascii")
+    p = base64.b64encode(password.encode("utf-8")).decode("ascii")
+    return (
+        f"$__u = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{u}'))\n"
+        f"$__p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{p}'))\n"
+        "$__cred = New-Object System.Management.Automation.PSCredential($__u, (ConvertTo-SecureString $__p -AsPlainText -Force))\n"
+        "Remove-Variable __p, __u -ErrorAction SilentlyContinue\n"
     )
-    return prelude + script
 
 
-def _detached_scripts(job_id, script):
-    d = JOB_DIR
-    paths = {
-        "inner": f"{d}\\job_{job_id}.inner.ps1",
-        "wrap":  f"{d}\\job_{job_id}.wrap.ps1",
-        "out":   f"{d}\\job_{job_id}.out",
-        "done":  f"{d}\\job_{job_id}.done",
-        "task":  f"PCAdminTool_{job_id}",
-    }
-    wrapper = (_WRAPPER_TMPL
-               .replace("__OUT__", paths["out"]).replace("__DONE__", paths["done"])
-               .replace("__INNER__", paths["inner"]).replace("__WRAP__", paths["wrap"])
-               .replace("__TASK__", paths["task"]))
-    inner = _JOB_PREAMBLE + script
-    b64 = lambda t: base64.b64encode(t.encode("utf-16-le")).decode("ascii")
-    launch = (_LAUNCH_TMPL
-              .replace("__DIR__", d)
-              .replace("__INNER__", paths["inner"]).replace("__WRAP__", paths["wrap"])
-              .replace("__TASK__", paths["task"])
-              .replace("__B64INNER__", b64(inner)).replace("__B64WRAP__", b64(wrapper)))
-    poll = (_POLL_TMPL.replace("__OUT__", paths["out"]).replace("__DONE__", paths["done"]))
-    return launch, poll
+def expects_reboot(op_id, params):
+    if op_id in ("pr_force_restart", "pr_force_signout_restart"):
+        return True
+    if op_id == "pr_full_soft_recycle":
+        v = (params or {}).get("AUTO_RESTART", "true").strip().lower()
+        return v not in ("false", "0", "no", "off")
+    return False
 
 
-def _close_client(client):
-    try:
-        client.wsman.close()
-    except Exception:
-        pass
-
-
-def run_detached_gen(host, username, password, transport, script, stop_flag,
-                     alt_hosts=(), max_wait=300, poll_every=3):
-    """
-    Generator. Yields ("info"|"ok"|"warn"|"err", text) progress lines and,
-    exactly once at the end, ("result", (stdout, stderr, success, host_in_use)).
-
-    host_in_use is the address that answered last -- the caller must keep using
-    it for every following task (it differs from `host` after Set Static IP).
-    """
-    job_id = uuid.uuid4().hex[:10]
-    launch, poll = _detached_scripts(job_id, script)
-
-    try:
-        sess = make_session(host, username, password, transport)
-        out, err, ok = run_remote_ps(sess, launch)
-        _close_client(sess)
-    except Exception as e:                       # noqa: BLE001
-        yield ("result", ("", f"Could not reach the target to start the job: {e}", False, host))
-        return
-    if not ok or "JOB_STARTED" not in out:
-        reason = (err or out or "no reply").strip()
-        yield ("result", ("", f"Could not start the detached job on the target: {reason[:500]}", False, host))
-        return
-
-    yield ("info", "Running as a detached SYSTEM job on the target -- it keeps running even if "
-                   "the network drops. Waiting for the result...")
-
-    candidates = []
-    for h in list(alt_hosts) + [host]:
-        if h and h not in candidates:
-            candidates.append(h)
-    if len(candidates) > 1:
-        yield ("info", "Will look for the target at: " + ", ".join(candidates))
-
-    t0 = time.time()
-    last_note = t0
-    dropped = False
-    announced_back = False
-    current = host
-
-    while True:
-        elapsed = time.time() - t0
-        if stop_flag.is_set():
-            yield ("warn", f"Stop requested -- the job (id {job_id}) keeps running on the target; "
-                           f"its result file stays in {JOB_DIR}.")
-            yield ("result", ("", "", False, current))
-            return
-        if elapsed > max_wait:
-            yield ("result", ("", f"TARGET_NOT_REACHED: no result within {int(max_wait)}s. The change may "
-                                  f"still have been applied -- check the target directly (job id {job_id}, "
-                                  f"files in {JOB_DIR}). Tried: {', '.join(candidates)}", False, current))
-            return
-        time.sleep(poll_every)
-
-        reached = False
-        for h in candidates:
-            if stop_flag.is_set():
-                break
+def reconnect_gen(hosts, username, password, transport, log=lambda s: None,
+                  attempts=None):
+    """Generator: yields SSE strings while waiting; returns (session, host) or (None, None)."""
+    attempts = attempts or RECONNECT_ATTEMPTS
+    for n in range(1, attempts + 1):
+        if _stop_flag.is_set():
+            return None, None
+        for h in hosts:
             try:
-                ps = make_session(h, username, password, transport, fast=True)
-                o, e, ok2 = run_remote_ps(ps, poll)
-                _close_client(ps)
-            except Exception as ex:              # noqa: BLE001
-                o, e, ok2 = "", str(ex), False
-            if not ok2:
-                continue
-            reached = True
-            if h != current:
-                current = h
-                if h != host:
-                    yield ("ok", f"Target answered on its NEW address {h} -- using it from now on.")
-            if dropped and not announced_back:
-                announced_back = True
-                yield ("ok", f"Target is reachable again ({h}).")
-            if "__PCA_DONE__:" in o:
-                lines = o.splitlines()
-                status = "FAIL"
-                body = []
-                for ln in lines:
-                    if ln.startswith("__PCA_DONE__:"):
-                        status = ln.split(":", 1)[1].strip()
-                    else:
-                        body.append(ln.lstrip("\ufeff"))
-                yield ("result", ("\n".join(body), "", status == "OK", current))
-                return
-            break
+                s = make_session(h, username, password, transport, fast=True)
+                out, err, ok = run_remote_ps(s, 'Write-Output "RECONNECT_OK"')
+                if ok and "RECONNECT_OK" in out:
+                    return s, h
+                if err.startswith("CRED_ERR"):
+                    return None, None
+            except Exception:
+                pass
+        msg = f"    Waiting for the target to come back... attempt {n}/{attempts}"
+        log(msg)
+        yield _ev({"type": "dim", "text": msg})
+        time.sleep(RECONNECT_WAIT_SECONDS)
+    return None, None
 
-        if not reached:
-            dropped = True      # only a round where NO address answered counts as a drop
 
-        now = time.time()
-        if now - last_note >= 15:
-            last_note = now
-            if reached:
-                yield ("info", f"Still running on the target... ({int(now - t0)}s)")
+# v3.8 (DC-42): the detached launcher used ONE method (Win32_Process.Create) and
+# failed with "PCAT_LAUNCH_FAIL:2" (Access denied) on targets where that WMI call
+# is refused from inside a WinRM session. It now tries five methods in order and
+# reports exactly which ones failed and why. All of them start a process that
+# lives OUTSIDE the WinRM shell, so it survives the network drop.
+_LAUNCH_TPL = r"""$dir = Join-Path $env:windir 'Temp'
+$ps1 = Join-Path $dir 'pcat_@@TOK@@.ps1'
+[IO.File]::WriteAllBytes($ps1, [Convert]::FromBase64String('@@B64@@'))
+$tn  = 'PCAT_@@TOK@@'
+$exe = 'powershell.exe'
+$arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $ps1 + '"'
+$cl  = $exe + ' ' + $arg
+$ok  = $false
+$why = @()
+if (-not $ok) {
+  try {
+    $a = New-ScheduledTaskAction -Execute $exe -Argument $arg
+    $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4)
+    Register-ScheduledTask -TaskName $tn -Action $a -Principal $p -Settings $s -Force -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $tn -ErrorAction Stop
+    Write-Output ('PCAT_LAUNCHED:schtask:' + $tn); $ok = $true
+  } catch {
+    $why += ('ScheduledTask(SYSTEM): ' + ($_.Exception.Message -replace '\s+', ' '))
+    try { Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+  }
+}
+if (-not $ok) {
+  try {
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cl } -ErrorAction Stop
+    if ($r.ReturnValue -eq 0) { Write-Output ('PCAT_LAUNCHED:cim:' + $r.ProcessId); $ok = $true }
+    else {
+      $cc = @{ 2 = 'Access denied'; 3 = 'Insufficient privilege'; 8 = 'Unknown failure'; 9 = 'Path not found'; 21 = 'Invalid parameter' }
+      $why += ('Win32_Process.Create(CIM): return code ' + $r.ReturnValue + ' (' + $cc[[int]$r.ReturnValue] + ')')
+    }
+  } catch { $why += ('Win32_Process.Create(CIM): ' + ($_.Exception.Message -replace '\s+', ' ')) }
+}
+if (-not $ok) {
+  try {
+    $r = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $cl -ErrorAction Stop
+    if ($r.ReturnValue -eq 0) { Write-Output ('PCAT_LAUNCHED:wmi:' + $r.ProcessId); $ok = $true }
+    else { $why += ('Win32_Process.Create(WMI): return code ' + $r.ReturnValue) }
+  } catch { $why += ('Win32_Process.Create(WMI): ' + ($_.Exception.Message -replace '\s+', ' ')) }
+}
+if (-not $ok) {
+  try {
+    if ($ps1 -match '\s') { $tr = $exe + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"' + $ps1 + '\"' }
+    else { $tr = $exe + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + $ps1 }
+    $o1 = & schtasks.exe /Create /TN $tn /TR $tr /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('create failed (' + $LASTEXITCODE + '): ' + $o1) }
+    $o2 = & schtasks.exe /Run /TN $tn 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('run failed (' + $LASTEXITCODE + '): ' + $o2) }
+    Write-Output ('PCAT_LAUNCHED:schtasks:' + $tn); $ok = $true
+  } catch {
+    $why += ('schtasks.exe: ' + ($_.Exception.Message -replace '\s+', ' '))
+    try { & schtasks.exe /Delete /TN $tn /F 2>&1 | Out-Null } catch {}
+  }
+}
+if (-not $ok) {
+  try {
+    $pr = Start-Process -FilePath $exe -ArgumentList $arg -WindowStyle Hidden -PassThru -ErrorAction Stop
+    Write-Output ('PCAT_LAUNCHED:startprocess:' + $pr.Id); $ok = $true
+  } catch { $why += ('Start-Process: ' + ($_.Exception.Message -replace '\s+', ' ')) }
+}
+if (-not $ok) {
+  $who = ''; $adm = ''
+  try {
+    $wi = [Security.Principal.WindowsIdentity]::GetCurrent(); $who = $wi.Name
+    $adm = ([Security.Principal.WindowsPrincipal]$wi).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch {}
+  Remove-Item $ps1 -Force -ErrorAction SilentlyContinue
+  Write-Output ('PCAT_LAUNCH_FAIL:' + ($why -join ' | ') + ' || account=' + $who + ' admin=' + $adm)
+}
+"""
+
+_CLEAN_TPL = r"""$b = Join-Path (Join-Path $env:windir 'Temp') 'pcat_@@TOK@@'
+try { Unregister-ScheduledTask -TaskName 'PCAT_@@TOK@@' -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+try { & schtasks.exe /Delete /TN 'PCAT_@@TOK@@' /F 2>&1 | Out-Null } catch {}
+Remove-Item ($b + '.*') -Force -ErrorAction SilentlyContinue
+"""
+
+_LAUNCH_METHOD_NAMES = {
+    "schtask": "one-shot scheduled task running as SYSTEM",
+    "cim": "Win32_Process.Create (CIM)",
+    "wmi": "Win32_Process.Create (WMI)",
+    "schtasks": "schtasks.exe one-shot task running as SYSTEM",
+    "startprocess": "hidden Start-Process (last resort; may end if the WinRM shell is closed)",
+}
+
+
+def _launch_fail_lines(out):
+    """Turn the PCAT_LAUNCH_FAIL:... marker into plain-English report lines."""
+    detail = out.split("PCAT_LAUNCH_FAIL:", 1)[1].strip() if "PCAT_LAUNCH_FAIL:" in out else out.strip()
+    methods, _, acct = detail.partition(" || ")
+    lines = ["  Could not start the task on the target -- every launch method failed:"]
+    for m in [x.strip() for x in methods.split(" | ") if x.strip()]:
+        lines.append("    - " + m)
+    admin_false = "admin=False" in acct
+    if acct.strip():
+        who = re.search(r"account=(.*?)\s+admin=", acct)
+        lines.append("  Signed in on the target as: %s  (administrator: %s)" % (
+            who.group(1).strip() if who else "?", "NO" if admin_false else "yes"))
+    if admin_false:
+        lines += ["  Cause: this account is NOT an administrator on the target (or Windows remote UAC is filtering its token).",
+                  "  Fix  : use a Domain Admin / local administrator account. For a local admin that is not the built-in",
+                  "         'Administrator', run on the target once:",
+                  "         reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f"]
+    else:
+        lines += ["  The account is an administrator, but Windows refused every way of starting a process outside the WinRM session.",
+                  "  Check on the target: the 'Task Scheduler' and 'Windows Management Instrumentation' services are running;",
+                  "  security software (EDR/antivirus) is not blocking task/WMI process creation; Group Policy does not",
+                  "  deny 'Log on as a batch job' to SYSTEM."]
+    return lines
+
+
+def _detach_launch_script(tok, body):
+    wrapper = (
+        "$ErrorActionPreference = 'Continue'\n$ProgressPreference = 'SilentlyContinue'\n$WarningPreference = 'SilentlyContinue'\n"
+        "$__base = $PSCommandPath -replace '\\.ps1$',''\n"
+        "$__o = $__base + '.out.txt'\n$__d = $__base + '.done.txt'\n"
+        "try {\n  & {\n" + body + "\n  } *>&1 | ForEach-Object { \"$_\" } | Out-File -FilePath $__o -Encoding utf8\n"
+        "} catch { (\"ERROR: \" + $_.Exception.Message) | Out-File -FilePath $__o -Append -Encoding utf8 }\n"
+        "'done' | Out-File -FilePath $__d -Encoding ascii\n"
+    )
+    b64 = base64.b64encode(b"\xef\xbb\xbf" + wrapper.encode("utf-8")).decode("ascii")
+    return _LAUNCH_TPL.replace("@@TOK@@", tok).replace("@@B64@@", b64)
+
+
+def _detach_poll_script(tok):
+    return (
+        "$b = Join-Path (Join-Path $env:windir 'Temp') 'pcat_" + tok + "'\n"
+        "if (Test-Path ($b + '.done.txt')) {\n"
+        "  if (Test-Path ($b + '.out.txt')) { Get-Content ($b + '.out.txt') -Raw -Encoding UTF8 }\n"
+        "  Write-Output 'PCAT_DONE'\n"
+        "} else { Write-Output 'PCAT_PENDING' }\n"
+    )
+
+
+def _detach_cleanup_script(tok):
+    return _CLEAN_TPL.replace("@@TOK@@", tok)
+
+
+# v3.8 (DC-44): reachability probing used while a network task is running.
+# After a network change the old address may be gone. Instead of blindly retrying
+# WinRM, probe (ICMP ping OR the WinRM TCP ports) the OLD IP and the HOST NAME in
+# parallel; if neither answers, probe the NEW IP, then the host name again, and only
+# then reconnect and read the real result from the target.
+_TCP_PROBE_PORTS = (5985, 5986)
+
+
+def _is_ipv4(s):
+    return bool(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", s or ""))
+
+
+def _resolve_safely(fn, arg, timeout=3.0):
+    """Run a blocking name lookup with a hard time limit; returns None on failure/timeout."""
+    box = {}
+    def w():
+        try:
+            box["v"] = fn(arg)
+        except Exception:
+            box["v"] = None
+    t = threading.Thread(target=w, daemon=True)
+    t.start(); t.join(timeout)
+    return box.get("v")
+
+
+def _make_ident(host):
+    """Old identity captured BEFORE the change: {'ip': ..., 'name': ...}."""
+    ip = name = None
+    if _is_ipv4(host):
+        ip = host
+        r = _resolve_safely(socket.gethostbyaddr, host)
+        if r and r[0] and r[0].lower() != host:
+            name = r[0]
+    else:
+        name = host
+        ip = _resolve_safely(socket.gethostbyname, host)
+    return {"ip": ip, "name": name}
+
+
+def _icmp_ping(host, timeout_s=2):
+    if not _HOST_RE.match(host or ""):
+        return False
+    try:
+        if platform.system() == "Windows":
+            cmd = ["ping", "-n", "1", "-w", str(int(timeout_s * 1000)), host]
+        else:
+            cmd = ["ping", "-c", "1", "-W", str(int(timeout_s)), host]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s + 4,
+                           creationflags=_NO_WINDOW)
+        if r.returncode != 0:
+            return False
+        # Windows returns 0 even for "Destination host unreachable" -- a real reply has TTL=
+        return ("TTL=" in r.stdout.upper()) if platform.system() == "Windows" else True
+    except Exception:
+        return False
+
+
+def _tcp_open(host, port, timeout_s=2):
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except Exception:
+        return False
+
+
+def _alive(host):
+    """True if the host answers ICMP ping or accepts a WinRM TCP connection."""
+    if _icmp_ping(host):
+        return True
+    return any(_tcp_open(host, p) for p in _TCP_PROBE_PORTS)
+
+
+def _probe_parallel(hosts):
+    """Probe all hosts at the same time; returns {host: bool}."""
+    res = {}
+    def w(h):
+        res[h] = _alive(h)
+    ts = [threading.Thread(target=w, args=(h,), daemon=True) for h in hosts]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(20)
+    return {h: bool(res.get(h)) for h in hosts}
+
+
+def smart_reconnect_gen(ident, new_ips, username, password, transport, ev, log=lambda s: None):
+    """
+    One reconnect round. Order: (1) OLD IP + HOST NAME probed in parallel;
+    (2) if neither answers: the NEW IP, then the host name; (3) WinRM reconnect on
+    whatever answered. Yields UI events; returns (session, host) or (None, None).
+    ev["new_alive"] is set to the new IP once it has answered.
+    """
+    def note(kind, text):
+        msg = "    " + text
+        log(msg)
+        return _ev({"type": kind, "text": msg})
+    cands = []
+    for x in (ident.get("ip"), ident.get("name")):
+        if x and x not in cands:
+            cands.append(x)
+    nm = ident.get("name")
+    if nm and not _is_ipv4(nm):
+        fresh = _resolve_safely(socket.gethostbyname, nm)      # DNS may now point at a new address
+        if fresh and fresh not in cands:
+            cands.append(fresh)
+    if _stop_flag.is_set():
+        return None, None
+    yield note("dim", "Checking the old address and the host name in parallel: " + ", ".join(cands) + " ...")
+    pr = _probe_parallel(cands)
+    alive = [h for h in cands if pr.get(h)]
+    if alive:
+        yield note("dim", "Answering: " + ", ".join(alive))
+    elif new_ips:
+        yield note("dim", "Neither the old address nor the host name answers -- checking the NEW IP: " + ", ".join(new_ips) + " ...")
+        pn = _probe_parallel(new_ips)
+        alive = [h for h in new_ips if pn.get(h)]
+        if alive:
+            ev["new_alive"] = alive[0]
+            yield note("success", "The new IP answers: " + ", ".join(alive))
+            if nm:
+                yield note("dim", "Now checking the host name " + nm + " ...")
+                if _probe_parallel([nm]).get(nm):
+                    yield note("success", "The host name " + nm + " answers as well.")
+                    if nm not in alive:
+                        alive.append(nm)
+                else:
+                    yield note("warning", "The host name " + nm + " does not answer yet (DNS can need a few minutes) -- using the new IP.")
+    for h in alive:
+        try:
+            s = make_session(h, username, password, transport, fast=True)
+            out, err, ok = run_remote_ps(s, 'Write-Output "RECONNECT_OK"')
+            if ok and "RECONNECT_OK" in out:
+                return s, h
+            if err.startswith("CRED_ERR"):
+                return None, None
+        except Exception:
+            pass
+    if alive:
+        yield note("dim", "It answers ping / the WinRM port, but WinRM is not ready yet -- retrying...")
+    else:
+        yield note("dim", "No answer yet -- waiting for the target to come back...")
+    return None, None
+
+
+def detached_run_gen(session, hosts, username, password, transport, body,
+                     max_wait, log=lambda s: None):
+    """
+    Generator. Yields SSE strings; returns (stdout, stderr, success, host_used).
+    """
+    tok = secrets.token_hex(6)
+    cur, cur_host = session, hosts[0]
+    new_ips = [x for x in hosts[1:] if x]
+    ident = _make_ident(hosts[0])            # old IP + host name, captured BEFORE the change
+    ev = {"new_alive": None}
+    out, err, ok = run_remote_ps(cur, _detach_launch_script(tok, body))
+    if "PCAT_LAUNCHED" not in out:
+        if err.startswith(("CRED_ERR", "TRANSPORT_ERR", "TIMEOUT_ERR")):
+            return "", err, False, cur_host
+        if "PCAT_LAUNCH_FAIL" in out:
+            return "\n".join(_launch_fail_lines(out)), "Could not start the task on the target", False, cur_host
+        return out, (err or "Could not start the detached task on the target: " + out.strip()), False, cur_host
+    _m = re.search(r"PCAT_LAUNCHED:(\w+)", out)
+    _meth = _LAUNCH_METHOD_NAMES.get(_m.group(1), _m.group(1)) if _m else "?"
+    _msg = "    Started on the target via: " + _meth
+    log(_msg); yield _ev({"type": "dim", "text": _msg})
+    started = time.time()
+    deadline = started + max_wait
+    last_note = started
+    interrupted = False
+    while time.time() < deadline:
+        if _stop_flag.is_set():
+            return "", "STOPPED: the task keeps running on the target; its output file stays in %windir%\\Temp\\pcat_" + tok + ".out.txt", False, cur_host
+        o, e, ok2 = run_remote_ps(cur, _detach_poll_script(tok))
+        if ok2:
+            if interrupted:
+                msg = f"    Reconnected to {cur_host}."
+                log(msg); yield _ev({"type": "success", "text": msg}); interrupted = False
+            if o.rstrip().endswith("PCAT_DONE"):
+                text = o.rstrip()[:-len("PCAT_DONE")]
+                run_remote_ps(cur, _detach_cleanup_script(tok))
+                return text, "", True, cur_host
+            now = time.time()
+            if now - last_note >= 30:
+                last_note = now
+                msg = f"    ...still running on the target ({int(now - started)}s)"
+                log(msg); yield _ev({"type": "dim", "text": msg})
+            time.sleep(DETACH_POLL_SECONDS)
+            continue
+        if e.startswith("CRED_ERR"):
+            return "", e, False, cur_host
+        if not interrupted:
+            interrupted = True
+            msg = "    Connection to the target interrupted (expected for network changes) -- reconnecting..."
+            log(msg); yield _ev({"type": "warning", "text": msg})
+        s2, h2 = yield from smart_reconnect_gen(ident, new_ips, username, password, transport, ev, log=log)
+        if s2 is not None:
+            cur, cur_host = s2, h2
+        else:
+            time.sleep(RECONNECT_WAIT_SECONDS)
+    if ev["new_alive"] and new_ips:
+        text = ("  The NEW IP %s answers (ping / WinRM port) and the old address no longer does -- the new address is active.\n"
+                "  The change was applied. The detailed result could not be read back over WinRM (it may still be starting up).\n"
+                "  Reconnect to the NEW address %s.\n" % (ev["new_alive"], ev["new_alive"]))
+        return text, "", True, ev["new_alive"]
+    text = ("  The target did not report completion within %d s.\n"
+            "  The change was started on the target and has most likely been applied.\n"
+            "  If you changed the IP address and connected by IP, reconnect to the NEW address.\n" % max_wait)
+    return text, "TIMEOUT_ERR:no completion marker from the target", False, cur_host
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  v3.7  ADMIN CONSOLES  (category "Admin Consoles")
+# ══════════════════════════════════════════════════════════════════════════════
+# These open a window on the machine HOSTING this service (a web server cannot
+# open a window on a remote browser's screen -- hard OS limit). Run the Web
+# edition on your own admin PC and they appear on your screen. Credentials are
+# supplied to Windows in the way each tool supports:
+#   * MMC consoles / Explorer : "net use \\host\IPC$" first -- MMC and Explorer
+#                               reuse that authenticated session.
+#   * Remote Desktop          : cmdkey TERMSRV/<host> (mstsc reads it).
+#   * PowerShell window       : password handed over in the child's environment
+#                               (never on a command line), then removed.
+#   * winrs / Firewall        : prompt in the new window / manual connect.
+CONSOLE_OP_IDS = {
+    "rt_open_computer_management", "ac_open_disk_management", "ac_open_device_manager",
+    "ac_open_services", "ac_open_event_viewer", "ac_open_shared_folders",
+    "ac_open_admin_share", "ac_open_firewall", "ac_open_remote_shell",
+    "ac_open_remote_cmd", "ac_open_rdp",
+}
+_MMC_TABLE = {
+    "rt_open_computer_management": ("compmgmt.msc", "\\\\{h}"),
+    "ac_open_disk_management":     ("diskmgmt.msc", "\\\\{h}"),
+    "ac_open_device_manager":      ("devmgmt.msc",  "\\\\{h}"),
+    "ac_open_services":            ("services.msc", "\\\\{h}"),
+    "ac_open_event_viewer":         ("eventvwr.msc", "{h}"),
+    "ac_open_shared_folders":      ("fsmgmt.msc",   "\\\\{h}"),
+}
+# ══════════════════════════════════════════════════════════════════════════════
+#  v3.8 (DC-45)  NETWORK PUSH + PING MONITOR  (v16 method restored for network ops)
+#  * The 7 network-changing tasks run INLINE again, exactly like v16 (one
+#    run_remote_ps call, no detached engine) -- that is the method that worked.
+#  * "Network Push" category: the command is sent and the tool does NOT wait for
+#    the result -> "<action> cmd pushed to the target machine".
+#  * "Ping Host" (np_ping_host): pings continuously until Stop and shows which
+#    IP / name answers, so an IP change can be watched live.
+# ══════════════════════════════════════════════════════════════════════════════
+PUSH_OPS = {"np_static_ip", "np_dhcp", "np_flush_dns", "np_reset_tcpip"}
+PUSH_DROPS_LINK = {"np_static_ip", "np_dhcp", "np_reset_tcpip"}   # later WinRM tasks would hit a dead link
+MONITOR_OPS = {"np_ping_host"}
+PUSH_MESSAGES = {
+    "np_static_ip":   "Static IP set cmd pushed to the target machine",
+    "np_dhcp":        "DHCP set cmd pushed to the target machine",
+    "np_flush_dns":   "Flush DNS cmd pushed to the target machine",
+    "np_reset_tcpip": "Reset TCP/IP cmd pushed to the target machine",
+}
+PUSH_GRACE_SECONDS = 8          # how long the command is given to be delivered / answer before we stop waiting
+MONITOR_INTERVAL = 2.0          # seconds between ping rounds
+MONITOR_HEARTBEAT_ROUNDS = 5    # print an unchanged status every N rounds
+MONITOR_MAX_SECONDS = 6 * 3600  # safety cap; Stop ends it sooner
+NETWORK_RECONNECT_ATTEMPTS = 10
+
+_NETSTATUS_PS = r"""
+Get-NetIPConfiguration -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Output ("  {0}: IPv4 {1} | Gateway {2} | DNS {3}" -f $_.InterfaceAlias, ($_.IPv4Address.IPAddress -join ','), ($_.IPv4DefaultGateway.NextHop -join ','), ($_.DNSServer.ServerAddresses -join ','))
+}
+"""
+
+
+def push_run(session, script):
+    """
+    Send a script and do not wait for the full result.
+    Returns (stdout, stderr, success, state); state is "done" when the target answered
+    within PUSH_GRACE_SECONDS with a real result, or "pushed" when the command was sent
+    and we stopped waiting (or the link dropped, which is the expected effect of a
+    network change).
+    """
+    box = {}
+
+    def w():
+        box["r"] = run_remote_ps(session, script)
+    t = threading.Thread(target=w, daemon=True)
+    t.start()
+    t.join(PUSH_GRACE_SECONDS)
+    if "r" not in box:
+        return "", "", True, "pushed"
+    out, err, ok = box["r"]
+    if not ok and err.startswith(("TRANSPORT_ERR", "TIMEOUT_ERR")):
+        return out, "", True, "pushed"
+    return out, err, ok, "done"
+
+
+_PING_TIME_RE = re.compile(r"time\s*[=<]\s*([0-9.]+)\s*ms", re.IGNORECASE)
+_PING_TTL_RE = re.compile(r"ttl\s*=\s*(\d+)", re.IGNORECASE)
+
+
+def _ping_detail(host, timeout_s=2):
+    """One ICMP ping -> (ok, rtt_ms or None, ttl or None)."""
+    if not _HOST_RE.match(host or ""):
+        return False, None, None
+    try:
+        if platform.system() == "Windows":
+            cmd = ["ping", "-n", "1", "-w", str(int(timeout_s * 1000)), host]
+        else:
+            cmd = ["ping", "-c", "1", "-W", str(int(timeout_s)), host]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s + 4,
+                           creationflags=_NO_WINDOW)
+        txt = r.stdout or ""
+        ttl_m = _PING_TTL_RE.search(txt)
+        if r.returncode != 0 or (platform.system() == "Windows" and not ttl_m):
+            return False, None, None
+        t_m = _PING_TIME_RE.search(txt)
+        return True, (float(t_m.group(1)) if t_m else None), (int(ttl_m.group(1)) if ttl_m else None)
+    except Exception:
+        return False, None, None
+
+
+def _probe_detail(host):
+    ok, rtt, ttl = _ping_detail(host)
+    winrm = any(_tcp_open(host, p, 1.5) for p in _TCP_PROBE_PORTS)
+    return {"ping": ok, "rtt": rtt, "ttl": ttl, "winrm": winrm}
+
+
+def _probe_detail_parallel(hosts):
+    """Probe every host at the same time; returns {host: detail-dict}."""
+    res = {}
+
+    def w(h):
+        res[h] = _probe_detail(h)
+    ts = [threading.Thread(target=w, args=(h,), daemon=True) for h in hosts]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(15)
+    return {h: res.get(h) or {"ping": False, "rtt": None, "ttl": None, "winrm": False} for h in hosts}
+
+
+def _fmt_detail(host, d):
+    if d["ping"]:
+        extra = (f" {d['rtt']:g}ms" if d["rtt"] is not None else "") + (f" TTL={d['ttl']}" if d["ttl"] is not None else "")
+        s = f"{host}: PING OK{extra}"
+    else:
+        s = f"{host}: no ping"
+    s += ", WinRM port open" if d["winrm"] else ", WinRM port closed"
+    return s
+
+
+def ping_monitor_gen(host, watch_ips, log=lambda s: None):
+    """
+    Generator: ping `host` (name or IP) plus any extra IPs to watch -- all in parallel,
+    every MONITOR_INTERVAL seconds -- until Stop is pressed. When `host` is a name its
+    current DNS answer is probed too, so you see WHICH IP the name is live on.
+    Prints on every change and every MONITOR_HEARTBEAT_ROUNDS rounds.
+    Returns the number of rounds run.
+    """
+    watch = [w for w in (watch_ips or []) if w]
+    yield _ev({"type": "info", "text": f"    Pinging {host}" + (f" + watching {', '.join(watch)}" if watch else "")
+               + f" every {MONITOR_INTERVAL:g}s -- press STOP to end."})
+    log(f"    Ping monitor started: {host} {watch}")
+    last_sig = None
+    last_live = None
+    rounds = 0
+    started = time.time()
+    while not _stop_flag.is_set() and (time.time() - started) < MONITOR_MAX_SECONDS:
+        rounds += 1
+        resolved = None
+        if not _is_ipv4(host):
+            resolved = _resolve_safely(socket.gethostbyname, host)
+        targets = list(dict.fromkeys([host] + ([resolved] if resolved else []) + watch))
+        det = _probe_detail_parallel(targets)
+        live = [h for h in targets if _is_ipv4(h) and (det[h]["ping"] or det[h]["winrm"])]
+        sig = (resolved, tuple((h, det[h]["ping"], det[h]["winrm"]) for h in targets))
+        changed = sig != last_sig
+        if changed or rounds % MONITOR_HEARTBEAT_ROUNDS == 0:
+            stamp = time.strftime("%H:%M:%S")
+            parts = []
+            if not _is_ipv4(host):
+                parts.append(f"{host} resolves to {resolved or 'NOTHING (DNS has no answer)'}")
+            parts += [_fmt_detail(h, det[h]) for h in targets]
+            any_up = any(det[h]["ping"] or det[h]["winrm"] for h in targets)
+            tag = "success" if any_up else "error"
+            prefix = "CHANGE " if (changed and last_sig is not None) else ""
+            line = f"    [{stamp}] #{rounds} {prefix}" + " | ".join(parts)
+            yield _ev({"type": tag, "text": line}); log(line)
+            if live != last_live:
+                msg = ("    LIVE IP now: " + ", ".join(live)) if live else "    LIVE IP now: none -- the target is not answering"
+                yield _ev({"type": "info" if live else "warning", "text": msg}); log(msg)
+                last_live = live
+            last_sig = sig
+        slept = 0.0
+        while slept < MONITOR_INTERVAL and not _stop_flag.is_set():
+            time.sleep(0.25)
+            slept += 0.25
+    msg = f"    Ping monitor stopped after {rounds} round(s)."
+    yield _ev({"type": "dim", "text": msg}); log(msg)
+    return rounds
+
+
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,253}$")
+_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # no flashing console from a .pyw / service
+
+
+def _ps_quote(s):
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _net_use_ipc(host, username, password):
+    """Authenticate this PC to the target (IPC$) so MMC/Explorer inherit it. Returns a status line."""
+    try:
+        r = subprocess.run(["net", "use", f"\\\\{host}\\IPC$", f"/user:{username}", password,
+                            "/persistent:no"],
+                           capture_output=True, text=True, timeout=45, creationflags=_NO_WINDOW)
+    except Exception as e:
+        return f"Could not authenticate first ({e}); the console may ask you to sign in."
+    if r.returncode == 0:
+        return f"Authenticated to {host} as {username} (net use IPC$)."
+    text = (r.stdout + r.stderr).replace(password, "********").strip().replace("\r", " ").replace("\n", " ")
+    if "1219" in text:
+        return (f"Windows already holds a connection to {host} under a different account (error 1219). "
+                f"Run  net use \\\\{host}\\IPC$ /delete  on this PC, then try again. Detail: {text}")
+    return f"Authentication to {host} failed: {text}"
+
+
+def launch_console(op_id, host, username, password, transport):
+    """Returns a list of message lines. Never includes the password."""
+    if not _HOST_RE.match(host or ""):
+        return [f"Refused: '{host}' is not a plain hostname/IP (letters, digits, . : - _ only)."]
+    if any(ord(c) < 32 for c in username):
+        return ["Refused: the username contains control characters."]
+    if platform.system() != "Windows":
+        return [f"This service is hosted on {platform.system()}, which cannot open Windows consoles --",
+                "nothing was launched. Host the Web edition on a Windows admin PC, or use the",
+                "Python GUI / PowerShell edition on your own PC."]
+    lines = []
+    try:
+        if op_id in _MMC_TABLE:
+            snap, tmpl = _MMC_TABLE[op_id]
+            lines.append(_net_use_ipc(host, username, password))
+            arg = "/computer:" + tmpl.format(h=host)
+            subprocess.Popen(["mmc.exe", snap, arg])
+            lines += [f"Launched: mmc.exe {snap} {arg}",
+                      "It opened on the machine HOSTING this service (your screen if you browse from this PC).",
+                      f"If the console shows the LOCAL computer instead, right-click its root node > Connect to another computer > {host}."]
+            if op_id == "ac_open_device_manager":
+                lines.append("Windows 8 / Server 2012 and later show remote devices read-only. For driver changes use 'Open Remote Desktop'.")
+        elif op_id == "ac_open_admin_share":
+            lines.append(_net_use_ipc(host, username, password))
+            subprocess.Popen(["explorer.exe", f"\\\\{host}\\C$"])
+            lines.append(f"Launched: explorer \\\\{host}\\C$")
+        elif op_id == "ac_open_firewall":
+            lines.append(_net_use_ipc(host, username, password))
+            subprocess.Popen(["mmc.exe", "wf.msc"])
+            lines += ["Launched Windows Firewall with Advanced Security (LOCAL view). To manage the TARGET:",
+                      f"  1. Right-click 'Windows Defender Firewall with Advanced Security' (top-left node)",
+                      f"  2. Choose 'Connect to Another Computer...'",
+                      f"  3. Pick 'Another computer', type {host}, OK.",
+                      "(The target must allow 'Windows Defender Firewall Remote Management' inbound.)"]
+        elif op_id == "ac_open_remote_shell":
+            auth = {"ntlm": "Negotiate", "kerberos": "Kerberos", "basic": "Basic", "credssp": "CredSSP"}.get(transport, "Negotiate")
+            inner = (f"$u = {_ps_quote(username)}; "
+                     "$sp = ConvertTo-SecureString $env:PCAT_PW -AsPlainText -Force; Remove-Item Env:PCAT_PW; "
+                     "$cred = New-Object System.Management.Automation.PSCredential($u, $sp); "
+                     f"Enter-PSSession -ComputerName {_ps_quote(host)} -Credential $cred -Authentication {auth}")
+            env = dict(os.environ); env["PCAT_PW"] = password
+            subprocess.Popen(["powershell.exe", "-NoExit", "-NoProfile", "-Command", inner],
+                             env=env, creationflags=_NEW_CONSOLE)
+            lines += [f"Launched a PowerShell window connected to {host} ({auth}).",
+                      "Inside it, run anything: cleanmgr /sagerun:1, defrag C: /U, netsh advfirewall show allprofiles, Get-NetAdapter ...",
+                      "If it says the host is not trusted: on THIS PC run (Admin)  Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value '" + host + "' -Concatenate -Force"]
+        elif op_id == "ac_open_remote_cmd":
+            subprocess.Popen(["cmd.exe", "/k", "winrs", f"-r:{host}", f"-u:{username}", "cmd"],
+                             creationflags=_NEW_CONSOLE)
+            lines += [f"Launched: winrs -r:{host} -u:{username} cmd  (new window).",
+                      "Type the password in that window when it asks -- winrs will not take it safely any other way."]
+        elif op_id == "ac_open_rdp":
+            r = subprocess.run(["cmdkey", f"/generic:TERMSRV/{host}", f"/user:{username}", f"/pass:{password}"],
+                               capture_output=True, text=True, timeout=20, creationflags=_NO_WINDOW)
+            if r.returncode == 0:
+                lines.append(f"Stored the credential for TERMSRV/{host} on this PC.")
             else:
-                yield ("warn", f"Target not answering yet (network change in progress?) ... ({int(now - t0)}s)")
+                lines.append("Could not store the credential: " + (r.stdout + r.stderr).replace(password, "********").strip())
+            subprocess.Popen(["mstsc.exe", f"/v:{host}"])
+            lines += [f"Launched: mstsc /v:{host}",
+                      "Inside the session you have EVERYTHING: devmgmt.msc, dfrgui, cleanmgr, wf.msc, ncpa.cpl, services.msc ...",
+                      f"When finished, remove the stored credential:  cmdkey /delete:TERMSRV/{host}"]
+        else:
+            lines.append(f"Unknown console operation: {op_id}")
+    except FileNotFoundError as e:
+        lines.append(f"Could not launch ({e}). Is this a full Windows install with the RSAT/MMC tools?")
+    except Exception as e:
+        lines.append(f"Could not launch automatically ({e}).")
+    return lines
 
 
 def run_remote_ps(session, script, label=""):
@@ -7142,7 +4171,7 @@ def run_tasks():
 
         header_txt = [
             "=" * 60,
-            f"  PC ADMIN & PERFORMANCE TOOL  v3.7  -- Web-Service Edition",
+            f"  PC ADMIN & PERFORMANCE TOOL  v3.8  -- Web-Service Edition",
             f"  {COPYRIGHT.splitlines()[0]}",
             "=" * 60,
             f"  Target   : {hostname}",
@@ -7161,38 +4190,46 @@ def run_tasks():
                                          "Date" in line or "Tasks" in line or "Log" in line else
                                "dim", "text": line})
 
-        # Create WinRM session
-        try:
-            session = make_session(hostname, username, password, transport)
-            # Quick test
-            _, stderr_test, ok_test = run_remote_ps(session, 'Write-Output "SESSION_OK"')
-            if not ok_test:
-                msg = f"  ✗ Cannot establish session: {stderr_test}"
+        # Create WinRM session (skipped when only local tasks -- Ping Host / consoles -- are selected)
+        only_local = all(o["id"] in (MONITOR_OPS | CONSOLE_OP_IDS) for o in selected)
+        session = None
+        if only_local:
+            yield ev({"type": "info", "text": "  No WinRM login needed for the selected task(s)."})
+            lf("  No WinRM session needed")
+        if not only_local:
+            try:
+                session = make_session(hostname, username, password, transport)
+                # Quick test
+                _, stderr_test, ok_test = run_remote_ps(session, 'Write-Output "SESSION_OK"')
+                if not ok_test:
+                    msg = f"  ✗ Cannot establish session: {stderr_test}"
+                    yield ev({"type": "error", "text": msg})
+                    lf(msg)
+                    yield ev({"type": "done", "success": False, "log": log_path.name})
+                    with open(log_path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(log_lines))
+                    return
+                yield ev({"type": "success", "text": "  ✓ WinRM session established"})
+                lf("  Session established")
+            except AuthenticationError:
+                msg = "  ✗ AUTHENTICATION FAILED — check username/password and domain format"
                 yield ev({"type": "error", "text": msg})
                 lf(msg)
-                yield ev({"type": "done", "success": False, "log": log_path.name})
-                with open(log_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(log_lines))
+                yield ev({"type": "done", "success": False})
                 return
-            yield ev({"type": "success", "text": "  ✓ WinRM session established"})
-            lf("  Session established")
-        except AuthenticationError:
-            msg = "  ✗ AUTHENTICATION FAILED — check username/password and domain format"
-            yield ev({"type": "error", "text": msg})
-            lf(msg)
-            yield ev({"type": "done", "success": False})
-            return
-        except Exception as e:
-            msg = f"  ✗ Cannot connect: {e}\n  Ensure WinRM is enabled: Enable-PSRemoting -Force"
-            yield ev({"type": "error", "text": msg})
-            lf(msg)
-            yield ev({"type": "done", "success": False})
-            return
+            except Exception as e:
+                msg = f"  ✗ Cannot connect: {e}\n  Ensure WinRM is enabled: Enable-PSRemoting -Force"
+                yield ev({"type": "error", "text": msg})
+                lf(msg)
+                yield ev({"type": "done", "success": False})
+                return
 
         yield ev({"type": "blank"})
 
-        cur_host = hostname   # v3.7: follows the target if its address changes
         total = len(selected)
+        cur_host = hostname          # may change if a task re-addresses the target
+        target_rebooting = False
+        link_dropped = False         # set after a pushed network change
         for idx, task in enumerate(selected):
             if _stop_flag.is_set():
                 yield ev({"type": "warning", "text": "\n  ⚠ STOPPED by user request"})
@@ -7213,99 +4250,117 @@ def run_tasks():
             lf(f"    {task['description']}")
             lf(f"    {'─'*50}")
 
-            # rt_open_computer_management: a Flask server cannot open a window
-            # on a REMOTE browser's screen -- that is a hard OS-level limit,
-            # not a design choice. What it CAN do, exactly like the desktop
-            # editions already do "on your own PC", is launch MMC locally on
-            # the machine actually running this Python process. For the
-            # common case -- someone running the Web edition on their own
-            # Windows PC and browsing to localhost -- that IS their own PC,
-            # so this now behaves identically to the desktop editions. If
-            # this service is hosted on a different machine than the one
-            # browsing to it, the window opens there instead; said plainly
-            # below rather than silently launching somewhere unexpected.
-            if task["id"] == "rt_open_computer_management":
-                if platform.system() == "Windows":
-                    try:
-                        subprocess.Popen(["mmc.exe", "compmgmt.msc", f"/computer:\\\\{hostname}"])
-                        msg = (f"  Launched: mmc.exe compmgmt.msc /computer:\\\\{hostname}\n"
-                               f"  This opened on the machine HOSTING this web service. If you are\n"
-                               f"  browsing from that same PC (e.g. localhost), it's on your screen now.\n"
-                               f"  If you're browsing from a DIFFERENT computer than the one hosting\n"
-                               f"  this service, it opened there instead -- run the command above\n"
-                               f"  yourself on your own PC to get a window on your own screen.")
-                    except Exception as e:
-                        msg = (f"  Could not launch it automatically ({e}).\n"
-                               f"  Run this yourself on the machine hosting this service:\n"
-                               f"    mmc.exe compmgmt.msc /computer:\\\\{hostname}")
-                else:
-                    msg = (f"  This service is hosted on {platform.system()}, which cannot run\n"
-                           f"  mmc.exe (Windows-only) -- nothing was launched.\n"
-                           f"  Run this yourself, on a Windows PC:\n"
-                           f"    mmc.exe compmgmt.msc /computer:\\\\{hostname}")
-                for line in msg.splitlines():
+            if target_rebooting:
+                msg = "    Skipped: the target is restarting -- run this task again once it is back online."
+                yield ev({"type": "warning", "text": msg}); lf(msg)
+                yield ev({"type": "blank"})
+                continue
+
+            # v3.7 Admin Consoles: launched locally on the machine hosting this
+            # service (a web server cannot open a window on a remote browser).
+            if task["id"] in CONSOLE_OP_IDS:
+                for line in launch_console(task["id"], cur_host, username, password, transport):
                     yield ev({"type": "info", "text": f"    {line}"})
                     lf(f"    {line}")
+                yield ev({"type": "blank"})
+                continue
+
+            # v3.8 Ping Host: runs locally, no WinRM, until Stop.
+            if task["id"] in MONITOR_OPS:
+                pv = param_vals.get(task["id"], {})
+                watch = []
+                for k in ("WATCH_IP1", "WATCH_IP2"):
+                    c, e = _validate_ipv4((pv.get(k) or "").strip()) if (pv.get(k) or "").strip() else (None, None)
+                    if c and not e:
+                        watch.append(c)
+                yield from ping_monitor_gen(cur_host, watch, log=lf)
+                yield ev({"type": "blank"})
+                continue
+
+            if link_dropped:
+                msg = ("    Skipped: a network change was pushed to the target, so the old connection is gone -- "
+                       "use 'Ping Host' to see when it answers, then run this task again.")
+                yield ev({"type": "warning", "text": msg}); lf(msg)
+                yield ev({"type": "blank"})
                 continue
 
             t_start = time.time()
-            cmd_text = final_commands.get(task["id"], task["command"])
+            tid = task["id"]
+            pushed_flag = False
+            cmd_text = final_commands.get(tid, task["command"])
             if task.get("needs_cred"):
-                cmd_text = inject_credentials(cmd_text, username, password)
+                cmd_text = build_cred_prelude(username, password) + cmd_text
 
-            if task.get("detached") or task.get("net_disruptive"):
-                # v3.7: detached job + poll-and-reconnect (see the engine block)
+            if tid in PUSH_OPS:
+                # v3.8 Network Push: send the command, do not wait for the result.
+                stdout, stderr, success, pstate = push_run(session, cmd_text)
+                if success:
+                    pushed_flag = True
+                    msg = f"    ✓ {PUSH_MESSAGES[tid]}"
+                    yield ev({"type": "success", "text": msg}); lf(msg)
+                    if pstate == "pushed" and not stdout.strip():
+                        stdout = "  The command keeps running on the target; no result is awaited. Use 'Ping Host' to watch it."
+                    elif pstate == "done":
+                        stdout = stdout.rstrip() + "\n  (the target answered within a few seconds -- result above)"
+                    link_dropped = tid in PUSH_DROPS_LINK
+            elif task.get("long"):
+                # Very long task (DISM / CHKDSK): run DETACHED on the target and poll,
+                # so a >170 s runtime cannot hang or kill this call.
                 alt_hosts = []
-                if task["id"] == "rt_set_static_ip":
-                    new_ip = (param_vals.get(task["id"], {}).get("IP") or "").strip()
-                    if new_ip and new_ip != cur_host:
-                        alt_hosts.append(new_ip)
-                stdout, stderr, success, used_host = "", "", False, cur_host
-                for kind, payload in run_detached_gen(
-                        cur_host, username, password, transport, cmd_text, _stop_flag,
-                        alt_hosts=alt_hosts, max_wait=task.get("wait_sec", 300)):
-                    if kind == "result":
-                        stdout, stderr, success, used_host = payload
-                        break
-                    tag_ = {"info": "info", "ok": "success", "warn": "warning", "err": "error"}.get(kind, "info")
-                    yield ev({"type": tag_, "text": f"    {payload}"})
-                    lf(f"    {payload}")
-                if used_host and used_host != cur_host:
-                    msg = f"    Target address is now {used_host} (was {cur_host}) -- using it for the remaining tasks"
-                    yield ev({"type": "success", "text": msg})
-                    lf(msg)
+                note = "    Long-running task: running detached on the target; waiting for it to finish (no timeout at 170 s)."
+                yield ev({"type": "dim", "text": note}); lf(note)
+                stdout, stderr, success, used_host = yield from detached_run_gen(
+                    session, [cur_host] + alt_hosts, username, password, transport,
+                    cmd_text, DETACH_LONG_WAIT, log=lf)
+                if used_host != cur_host:
                     cur_host = used_host
-                    try:
-                        session = make_session(cur_host, username, password, transport)
-                    except Exception:
-                        pass
+                    msg = f"    Target is now reached at {cur_host}."
+                    yield ev({"type": "info", "text": msg}); lf(msg)
+                session = make_session(cur_host, username, password, transport)
             else:
                 stdout, stderr, success = run_remote_ps(session, cmd_text, task["label"])
-
-                # Dropped/timed-out session: reconnect. Only a NON-sensitive task is
-                # retried -- re-running a sensitive one (rename, restart, delete...)
-                # after an unknown outcome could do it twice.
                 if not success and stderr.startswith(("TRANSPORT_ERR", "TIMEOUT_ERR")):
-                    yield ev({"type": "warning", "text": "    Connection lost -- reconnecting..."})
-                    lf("    Connection lost -- reconnecting...")
-                    try:
-                        session = make_session(cur_host, username, password, transport)
-                        _, _, reconn_ok = run_remote_ps(session, 'Write-Output "RECONNECTED"')
-                        if reconn_ok and task.get("danger"):
-                            m1 = ("    Session reconnected. This task is sensitive, so it was NOT re-run "
-                                  "automatically -- its outcome is unknown: check the target, then re-run if needed.")
-                            yield ev({"type": "warning", "text": m1})
-                            lf(m1)
-                        elif reconn_ok:
-                            yield ev({"type": "success", "text": "    Session reconnected -- retrying task"})
-                            lf("    Session reconnected -- retrying task")
+                    if expects_reboot(tid, param_vals.get(tid, {})):
+                        msg = "    Connection closed because the target is restarting -- this is the expected result."
+                        yield ev({"type": "success", "text": msg}); lf(msg)
+                        stdout, stderr, success = "  Restart requested; the target is going down.", "", True
+                        target_rebooting = True
+                    elif tid in NETWORK_BLIP_OPS:
+                        # v16 method: the connection dropping is the expected effect of a network
+                        # change -- do NOT retry the change; reconnect and report what the target has now.
+                        msg = "    Connection dropped while the network changed -- this is expected. Checking the target..."
+                        yield ev({"type": "warning", "text": msg}); lf(msg)
+                        alt = []
+                        if tid == "rt_set_static_ip":
+                            nip = (param_vals.get(tid, {}).get("IP") or "").strip()
+                            if nip and nip != cur_host:
+                                alt.append(nip)
+                        s2, h2 = yield from reconnect_gen([cur_host] + alt, username, password, transport,
+                                                          log=lf, attempts=NETWORK_RECONNECT_ATTEMPTS)
+                        if s2 is not None:
+                            session, cur_host = s2, h2
+                            so, se, sok = run_remote_ps(session, _NETSTATUS_PS)
+                            stdout = ("  The command was delivered; the connection dropped as expected.\n"
+                                      f"  Target answers again at {cur_host}. Current network status:\n" + so)
+                            stderr, success = "", True
+                        else:
+                            stdout = ("  The command was delivered but the target has not answered yet.\n"
+                                      "  Use 'Ping Host' (Network Push) to watch it, then re-check.")
+                            stderr, success = "", False
+                    else:
+                        msg = "    Connection lost -- reconnecting..."
+                        yield ev({"type": "warning", "text": msg}); lf(msg)
+                        s2, h2 = yield from reconnect_gen([cur_host], username, password, transport, log=lf)
+                        if s2 is not None:
+                            session = make_session(cur_host, username, password, transport)
+                            msg = "    Session reconnected -- retrying task"
+                            yield ev({"type": "success", "text": msg}); lf(msg)
                             stdout, stderr, success = run_remote_ps(session, cmd_text, task["label"])
                         else:
-                            yield ev({"type": "error", "text": "    Reconnect failed"})
-                            lf("    Reconnect failed")
-                    except Exception as e:
-                        yield ev({"type": "error", "text": f"    Reconnect failed: {e}"})
-                        lf(f"    Reconnect failed: {e}")
+                            msg = "    Reconnect failed -- the target did not come back in time"
+                            yield ev({"type": "error", "text": msg}); lf(msg)
+            if success and tid in (REBOOT_OPS | CONDITIONAL_REBOOT_OPS) and any(m in stdout for m in REBOOT_MARKERS):
+                target_rebooting = True
 
             elapsed = round(time.time() - t_start, 1)
 
@@ -7355,7 +4410,7 @@ def run_tasks():
                     yield ev({"type": "error", "text": f"    ✗ {line}"})
                     lf(f"    ✗ {line}")
 
-            status = "✓ Completed" if success else "⚠ Completed with errors"
+            status = ("✓ Pushed" if pushed_flag else "✓ Completed") if success else "⚠ Completed with errors"
             yield ev({"type": "success" if success else "warning",
                       "text": f"    {status} in {elapsed}s"})
             yield ev({"type": "blank"})
@@ -7431,7 +4486,7 @@ def _lan_ip():
 if __name__ == "__main__":
     lan_ip = _lan_ip()
     print("=" * 60)
-    print("  PC Admin & Performance Tool  v3.7  -- Web-Service Edition")
+    print("  PC Admin & Performance Tool  v3.8  -- Web-Service Edition")
     print(f"  {COPYRIGHT.splitlines()[0]}")
     print("=" * 60)
     print(f"  Local   : http://localhost:{SERVICE_PORT}")

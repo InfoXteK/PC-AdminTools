@@ -33,7 +33,7 @@ import win32service
 import win32event
 import servicemanager
 
-SERVICE_PORT = 3038
+SERVICE_PORT = 3030
 
 
 class PCAdminToolService(win32serviceutil.ServiceFramework):
