@@ -1,0 +1,11 @@
+Flask>=2.3
+pypsrp[credssp]>=0.9.1
+pywin32>=306; sys_platform == "win32"
+
+# Kerberos transport (optional): also run
+#   pip install "pypsrp[kerberos]"
+# On Linux hosts this additionally needs system Kerberos dev headers first:
+#   sudo apt install libkrb5-dev   (Debian/Ubuntu)
+#   sudo dnf install krb5-devel    (RHEL/Fedora)
+# Windows hosts need nothing extra -- pyspnego uses native SSPI automatically.
+# NTLM (the default/recommended transport) and Basic auth need none of this.
