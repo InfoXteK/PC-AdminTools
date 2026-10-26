@@ -1,14 +1,14 @@
-PC Admin & Performance Tool -- Web-Service Edition  (v3.7)
+PC Admin & Performance Tool -- Web-Service Edition  (v3.8)
 ================================================================
-Runs as a standalone network service on PORT 3038. Once started on a
+Runs as a standalone network service on PORT 3030. Once started on a
 host, anyone on the same allowed subnet can open it from a browser at:
 
-    http://<hosting-machine-IP>:3038
+    http://<hosting-machine-IP>:3030
 
 All logs and session files are written LOCALLY on the hosting machine
 (the "logs" folder next to app.py) -- not on the client's browser/PC.
 
-WHAT'S NEW IN v3.7
+WHAT'S NEW IN v3.8
   - FIX: network operations no longer leave the tool silent or force an
     application restart. Set Static IP, Set DHCP, Flush DNS, Reset TCP/IP and the
     adapter restarts now run as a detached SYSTEM job ON THE TARGET. The tool
@@ -31,7 +31,7 @@ WHAT'S NEW IN v3.7
     They open on the TARGET's own screen using the credentials you entered.
     Needs someone signed in at the target's physical console, and Windows
     8.1 / Server 2012 R2 or newer on the target.
-  - Total operations: 105 (was 67) in 8 categories. Web port: 3038 (was 3037).
+  - Total operations: 105 (was 67) in 8 categories. Web port: 3030 (was 3037).
   - The PowerShell GUI edition is NOT part of this update and stays at v3.6.
 
 WHAT'S NEW IN v3.6
@@ -219,9 +219,9 @@ UPGRADING FROM AN OLDER INSTALL
     2. Copy THIS folder to the host (a fresh folder is fine, or overwrite
        the old one) and run install_service.bat / install_and_run.sh as
        normal -- it removes any previous copy of the service, opens
-       port 3038, and registers the service under the same service
+       port 3030, and registers the service under the same service
        name, now pointed at the new port.
-    3. Update any saved bookmarks / links to use :3038.
+    3. Update any saved bookmarks / links to use :3030.
   Skipping step 1 just leaves a harmless unused firewall rule open on
   the old port -- it won't conflict with the new one, but you should
   still close it if this machine is internet-facing.
@@ -266,7 +266,7 @@ WORKS ON
   - The TARGET machines it manages: must be Windows, with WinRM enabled
     (run once on each target, as Admin: Enable-PSRemoting -Force).
   - Any CLIENT browser on the same subnet, no install needed there --
-    just a browser pointed at http://<hosting-IP>:3038
+    just a browser pointed at http://<hosting-IP>:3030
 
 HOW TO RUN -- Windows / Windows Server  (installs as a real Service)
   1. Copy this folder to the machine that will host the service, e.g.
@@ -275,12 +275,12 @@ HOW TO RUN -- Windows / Windows Server  (installs as a real Service)
      This installs dependencies, removes any previous version of the
      service and its old firewall rules, registers "PC Admin &
      Performance Tool - Web Service" in services.msc with Startup
-     Type = Automatic, opens firewall port 3038, and starts it.
+     Type = Automatic, opens firewall port 3030, and starts it.
   3. Open services.msc to confirm -- you'll see it listed, Status
      "Running", Startup type "Automatic". It will keep running in the
      background (no console window) and restart automatically on reboot.
   4. Share the URL with anyone on the same subnet:
-        http://<this-machine-IP-or-name>:3038
+        http://<this-machine-IP-or-name>:3030
   5. To stop/remove it later, run uninstall_service.bat.
 
   Prefer to just test it first without installing a service? Run
@@ -297,12 +297,12 @@ HOW TO RUN -- Linux
      pcadmintool.service.template.
 
 FIREWALL
-  Make sure TCP port 3038 is allowed inbound on the hosting machine so
+  Make sure TCP port 3030 is allowed inbound on the hosting machine so
   other hosts on the subnet can reach it. install_service.bat attempts
   this automatically on Windows via netsh; on Linux, open it with your
   distro's firewall tool, e.g.:
-    sudo ufw allow 3038/tcp
-    sudo firewall-cmd --add-port=3038/tcp --permanent && sudo firewall-cmd --reload
+    sudo ufw allow 3030/tcp
+    sudo firewall-cmd --add-port=3030/tcp --permanent && sudo firewall-cmd --reload
 
 LOGS & FILES
   Every run writes: logs/AdminTool_<hostname>_<timestamp>.log
