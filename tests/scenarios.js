@@ -1,0 +1,55 @@
+global.window = global; window.fetch = undefined;
+for (const f of ['ops-data.js', 'demo-engine.js', 'demo-sims-1.js', 'demo-sims-2.js']) require('../docs/demo/' + f);
+const D = window.DemoEngine; let fails = 0;
+const ok = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fails++; };
+async function run(body, stopAfterMs) {
+  const r = await window.fetch('/api/run', { method: 'POST', body: JSON.stringify(Object.assign({ hostname: 'DEMO-PC01', username: 'CORP\\admin1', password: 'x', transport: 'ntlm', confirmed_danger: true }, body)) });
+  if (stopAfterMs) setTimeout(() => window.fetch('/api/stop', { method: 'POST' }), stopAfterMs);
+  const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '', evs = [];
+  for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); const parts = buf.split('\n\n'); buf = parts.pop(); for (const p of parts) if (p.startsWith('data: ')) evs.push(JSON.parse(p.slice(6))); }
+  return evs;
+}
+const txt = evs => evs.map(e => e.text || '').join('\n');
+const SP = { ADAPTER: 'Ethernet', IP: '192.168.10.222', MASK: '255.255.255.0', GATEWAY: '192.168.10.1', DNS1: '192.168.10.5', DNS2: '8.8.8.8' };
+(async () => {
+  D.speed = 0;
+  console.log('1. danger gate (server-side)');
+  let e = await run({ tasks: ['empty_recycle_bin'], confirmed_danger: false });
+  ok(/Refused: 1 sensitive/.test(txt(e)) && e.pop().success === false, 'refused without confirmed_danger');
+  console.log('2. parameter validation (server-side)');
+  e = await run({ tasks: ['np_set_static_ip'], params: { np_set_static_ip: Object.assign({}, SP, { IP: '999.1.1.1' }) } });
+  ok(/invalid parameter value/.test(txt(e)) && /Push: Set Static IP/.test(txt(e)), 'invalid IP refused: ' + (e.find(x => /Static IP/.test(x.text || '')) || {}).text);
+  console.log('3. v16 gateway typo (IP 192.168.16.205, gateway 192.168.6.1)');
+  e = await run({ tasks: ['np_set_static_ip'], params: { np_set_static_ip: Object.assign({}, SP, { IP: '192.168.16.205', GATEWAY: '192.168.6.1' }) } });
+  ok(/not inside the subnet/.test(txt(e)) && /nothing was pushed/.test(txt(e)), 'typo gateway refused before anything is sent');
+  console.log('4. push static IP then watch it with the Ping Monitor');
+  D.speed = 0.25; D.resetTarget('DEMO-PC01'); const oldIp = D.T.ip;
+  e = await run({ tasks: ['np_set_static_ip'], params: { np_set_static_ip: Object.assign({}, SP, { IP: '192.168.10.222' }) } });
+  ok(/RESULT: ✓ PUSHED — Static IP set command pushed to the target machine/.test(txt(e)), 'PUSHED message shown (not waiting for a result)');
+  ok(D.T.ip === oldIp, 'target still has its OLD ip right after the push (applies a few seconds later)');
+  e = await run({ tasks: ['np_ping_monitor'], params: { np_ping_monitor: { IP1: oldIp, IP2: '192.168.10.222' } } }, 9000);
+  const t = txt(e);
+  ok(/answering IP: .*192\.168\.10\.222/.test(t), 'monitor shows the NEW ip answering');
+  ok(new RegExp('▼ ' + oldIp.replace(/\./g, '\\.') + ' stopped answering').test(t), 'monitor flags the OLD ip going silent');
+  ok(/NOTHING answers/.test(t), 'monitor shows the brief outage while the IP switches');
+  ok(/resolves to/.test(t) || /WinRM 5985 open/.test(t), 'monitor reports the name / WinRM state');
+  ok(/PING MONITOR STOPPED/.test(t) && /Summary DEMO-PC01/.test(t), 'Stop works and prints the summary');
+  console.log('5. verified static IP to a WRONG network with auto-rollback ON');
+  D.speed = 0; D.clearTimers(); D.resetTarget('DEMO-PC01');
+  e = await run({ tasks: ['rt_set_static_ip'], params: { rt_set_static_ip: Object.assign({}, SP, { IP: '10.20.30.40', GATEWAY: '10.20.30.1', ROLLBACK: 'true' }) } });
+  ok(/REVERTED/.test(txt(e)) && /⚠ WARNING/.test(txt(e)), 'auto-rollback reverts and reports WARNING');
+  console.log('   ...with auto-rollback OFF');
+  D.resetTarget('DEMO-PC01');
+  e = await run({ tasks: ['rt_set_static_ip'], params: { rt_set_static_ip: Object.assign({}, SP, { IP: '10.20.30.40', GATEWAY: '10.20.30.1', ROLLBACK: 'false' }) } });
+  ok(/TARGET_NOT_REACHED/.test(txt(e)) && /✗ FAILED/.test(txt(e)), 'without rollback the tool loses the PC -> TARGET_NOT_REACHED / FAILED');
+  console.log('6. Ping Monitor must run alone');
+  e = await run({ tasks: ['np_ping_monitor', 'flush_dns'], params: { np_ping_monitor: { IP1: '', IP2: '' } } });
+  ok(/must be run on its own/.test(txt(e)), 'refused when combined with another task');
+  console.log('7. footer / tally / stop mid-run');
+  e = await run({ tasks: ['system_info', 'top_processes', 'disk_space_report'] });
+  ok(/ALL TASKS COMPLETED ✓/.test(txt(e)) && /3 succeeded, 0 warning, 0 failed/.test(txt(e)), 'tally 3/0/0 and "ALL TASKS COMPLETED"');
+  D.speed = 0.05; setTimeout(() => D.stop(), 200);
+  e = await run({ tasks: ['run_sfc', 'run_dism', 'wu_history'] });
+  ok(/STOPPED BY USER/.test(txt(e)), 'Stop mid-run ends with STOPPED BY USER');
+  console.log(fails ? '\n' + fails + ' FAILED' : '\nALL SCENARIO CHECKS PASSED'); process.exit(fails ? 1 : 0);
+})();

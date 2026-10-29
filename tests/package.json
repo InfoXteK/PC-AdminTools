@@ -1,0 +1,7 @@
+{
+  "name": "pc-admintools-demo-tests",
+  "private": true,
+  "description": "Headless checks for the live demo (no browser needed): engine, scenarios, UI click-through, landing page.",
+  "scripts": { "test": "node run_all_ops.js && node scenarios.js && node ui_test.js && node landing_test.js" },
+  "devDependencies": { "jsdom": "^26.0.0" }
+}

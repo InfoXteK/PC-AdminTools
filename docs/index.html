@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC Admin &amp; Performance Tool — remote Windows administration, with a live demo</title>
+<meta name="description" content="Administer Windows PCs remotely over WinRM from a browser: 113 operations in 9 categories, push-mode network changes and a live ping monitor. Try the interactive demo — no install, nothing touches a real PC.">
+<meta property="og:title" content="PC Admin &amp; Performance Tool — live demo">
+<meta property="og:description" content="113 remote-admin operations, real UI, simulated target. Try it in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231d4ed8'/%3E%3Cpath d='M14 40l12-12 8 8 16-16' stroke='%2322d3ee' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root{--bg:#0b1220;--bg2:#111a2e;--pnl:#16223a;--card:#1b2a47;--bdr:#2a3f66;--bdr2:#3a5580;--acc:#2563eb;--cyan:#22d3ee;--grn:#22c55e;--yel:#f59e0b;--red:#ef4444;--txt:#cfdcf0;--txtb:#f1f5ff;--dim:#7f98b8;--mono:Consolas,"Cascadia Mono",Menlo,monospace}
+  *{box-sizing:border-box} html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 "Segoe UI",system-ui,-apple-system,Arial,sans-serif}
+  a{color:var(--cyan);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+  nav{position:sticky;top:0;z-index:20;background:rgba(11,18,32,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--bdr)}
+  nav .wrap{display:flex;align-items:center;gap:20px;height:56px}
+  nav .brand{font-weight:800;color:var(--txtb);letter-spacing:.02em;white-space:nowrap}
+  nav .brand span{color:var(--cyan)}
+  nav .links{display:flex;gap:16px;margin-left:auto;font-size:14px;flex-wrap:wrap}
+  nav .links a{color:var(--txt)} nav .cta{background:var(--acc);color:#fff!important;padding:7px 14px;border-radius:6px;font-weight:700}
+  .hero{padding:72px 0 40px;background:radial-gradient(900px 380px at 70% -10%,rgba(34,211,238,.16),transparent),radial-gradient(700px 360px at 0% 0%,rgba(37,99,235,.28),transparent)}
+  .hero h1{font-size:clamp(32px,5vw,54px);line-height:1.1;margin:0 0 14px;color:var(--txtb);letter-spacing:-.02em}
+  .hero h1 em{font-style:normal;color:var(--cyan)}
+  .hero p.lead{font-size:19px;max-width:780px;color:var(--txt);margin:0 0 26px}
+  .btns{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:13px 22px;border-radius:8px;font-weight:700;font-size:15px;border:1px solid var(--bdr2);color:var(--txtb);background:var(--pnl)}
+  .btn.primary{background:linear-gradient(135deg,#2563eb,#0891b2);border-color:transparent;color:#fff}
+  .btn:hover{text-decoration:none;filter:brightness(1.12)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:40px}
+  .stat{background:var(--pnl);border:1px solid var(--bdr);border-radius:10px;padding:16px 18px}
+  .stat b{display:block;font-size:30px;color:var(--txtb);line-height:1.1}
+  .stat span{font-size:13px;color:var(--dim)}
+  section{padding:56px 0;border-top:1px solid var(--bdr)}
+  section.alt{background:var(--bg2)}
+  h2{font-size:30px;margin:0 0 8px;color:var(--txtb);letter-spacing:-.01em}
+  .sub{color:var(--dim);max-width:760px;margin:0 0 28px}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))} .g3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{background:var(--pnl);border:1px solid var(--bdr);border-radius:10px;padding:18px 20px}
+  .card h3{margin:0 0 6px;font-size:17px;color:var(--txtb)}
+  .card p{margin:0;font-size:14.5px}
+  .card .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;background:#12345f;color:#8fd3ff;margin-bottom:8px;font-weight:700;letter-spacing:.04em}
+  .card .tag.warn{background:#4a2a07;color:#fbbf24}
+  .card ul{margin:10px 0 0;padding-left:18px;font-size:14px;color:var(--txt)} .card li{margin:3px 0}
+  .try a.card{display:block;color:inherit;transition:border-color .15s,transform .15s} .try a.card:hover{border-color:var(--cyan);transform:translateY(-2px);text-decoration:none}
+  .try .go{color:var(--cyan);font-weight:700;font-size:13px;margin-top:8px;display:block}
+  /* architecture diagram */
+  .arch{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;justify-content:center}
+  .node{flex:1 1 190px;max-width:260px;background:var(--card);border:1px solid var(--bdr2);border-radius:10px;padding:14px 16px;text-align:center}
+  .node b{display:block;color:var(--txtb)} .node small{color:var(--dim);font-size:12.5px}
+  .arrow{align-self:center;color:var(--cyan);font:700 13px var(--mono);padding:0 8px;text-align:center;min-width:90px}
+  .arrow i{display:block;font-style:normal;font-size:20px;line-height:1}
+  /* explorer */
+  .explore{background:var(--pnl);border:1px solid var(--bdr);border-radius:12px;overflow:hidden}
+  .ex-top{display:flex;gap:10px;flex-wrap:wrap;padding:12px;border-bottom:1px solid var(--bdr);background:#12203a}
+  .ex-top input{flex:1 1 240px;background:#0a1220;color:var(--txtb);border:1px solid var(--bdr);border-radius:6px;padding:9px 12px;font-size:14px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{background:#1b2a47;color:var(--txt);border:1px solid var(--bdr);border-radius:999px;padding:5px 12px;font-size:12.5px;cursor:pointer}
+  .chip.on{background:var(--acc);color:#fff;border-color:transparent}
+  .ex-list{max-height:520px;overflow:auto}
+  .op{display:flex;gap:12px;padding:10px 16px;border-bottom:1px solid #1f3152;font-size:14px}
+  .op:last-child{border-bottom:0}
+  .op .n{flex:1;min-width:0} .op .n b{color:var(--txtb);font-weight:600} .op.d .n b{color:var(--yel)}
+  .op .n span{display:block;color:var(--dim);font-size:12.5px}
+  .op .c{font-size:11px;color:#8ab0cc;white-space:nowrap}
+  .op .f{font-size:10.5px;display:flex;gap:4px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end;max-width:210px}
+  .op .f i{font-style:normal;background:#12345f;color:#8fd3ff;border-radius:3px;padding:1px 6px}
+  .op .f i.d{background:#4a2a07;color:#fbbf24}
+  .ex-foot{padding:10px 16px;font-size:13px;color:var(--dim);background:#12203a;border-top:1px solid var(--bdr)}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--bdr);vertical-align:top}
+  th{color:var(--txtb);background:#12203a}
+  code{font-family:var(--mono);background:#0a1220;border:1px solid var(--bdr);border-radius:4px;padding:1px 6px;font-size:13px;color:#a5e3ff}
+  pre{background:#0a1220;border:1px solid var(--bdr);border-radius:8px;padding:14px 16px;overflow:auto;font:13px/1.55 var(--mono);color:#cfe3ff;margin:12px 0}
+  .note{background:#1c1a0c;border:1px solid #4a3d10;color:#f3d98a;border-radius:8px;padding:12px 16px;font-size:14.5px}
+  .tl{border-left:2px solid var(--bdr2);margin-left:6px;padding-left:20px}
+  .tl .it{position:relative;margin:0 0 20px} .tl .it::before{content:"";position:absolute;left:-27px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--cyan);border:2px solid var(--bg)}
+  .tl .it b{color:var(--txtb)} .tl .it p{margin:2px 0 0;font-size:14.5px}
+  footer{padding:34px 0;border-top:1px solid var(--bdr);color:var(--dim);font-size:13.5px}
+  @media(max-width:760px){nav .links a:not(.cta){display:none}.arrow{min-width:100%;padding:6px 0}.arrow i{transform:rotate(90deg)}.op{flex-wrap:wrap}.op .f{justify-content:flex-start;max-width:none}}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <div class="brand">PC&nbsp;ADMIN&nbsp;<span>TOOL</span></div>
+  <div class="links"><a href="#how">How it works</a><a href="#editions">Editions</a><a href="#features">Features</a><a href="#ops">All operations</a><a href="#try">Try it</a><a href="#install">Install</a>
+    <a href="https://github.com/MohamedAbdullahKhan/PC-AdminTools" target="_blank" rel="noopener">GitHub</a><a class="cta" href="demo/">Live demo</a></div>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <h1>Administer Windows PCs remotely —<br><em>from a browser tab.</em></h1>
+  <p class="lead">One tool, 113 ready-made operations: clean up, diagnose, repair, change network settings, restart services, open admin consoles on a user's screen. It talks to the target over Windows' built-in remote management (WinRM) — nothing to install on the PCs you manage.</p>
+  <div class="btns"><a class="btn primary" href="demo/">&#9654;&nbsp; Open the live demo</a><a class="btn" href="#try">Guided scenarios</a><a class="btn" href="https://github.com/MohamedAbdullahKhan/PC-AdminTools" target="_blank" rel="noopener">View on GitHub</a></div>
+  <div class="stats">
+    <div class="stat"><b id="sOps">113</b><span>operations</span></div>
+    <div class="stat"><b id="sCats">9</b><span>categories</span></div>
+    <div class="stat"><b>3</b><span>editions (Web, Python GUI, PowerShell GUI)</span></div>
+    <div class="stat"><b>4</b><span>auth transports: NTLM · Basic · Kerberos · CredSSP</span></div>
+    <div class="stat"><b>3030</b><span>fixed web port</span></div>
+  </div>
+  <p class="note" style="margin-top:26px"><b>About the demo:</b> GitHub Pages can only host static files, so the demo runs the project's <b>real web interface</b> with a browser-side stand-in for the server and a <b>fictional PC</b> (“DEMO-PC01”). Everything responds live — including a simulated PC whose IP really changes when you push one — but <b>nothing is ever sent to a real computer</b>, and all numbers are invented.</p>
+</div></header>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <p class="sub">The hosting computer runs a small web service. You open it from any browser on the allowed network, enter the target and an admin account, pick tasks and press Run. Output streams back live.</p>
+  <div class="arch">
+    <div class="node"><b>Your browser</b><small>the web UI · port 3030</small></div>
+    <div class="arrow"><i>&#8594;</i>HTTP</div>
+    <div class="node"><b>Web service</b><small>Python + Flask on the hosting PC<br>validates input · streams logs · saves logs</small></div>
+    <div class="arrow"><i>&#8594;</i>WinRM<br>TCP 5985</div>
+    <div class="node"><b>Target Windows PC</b><small>runs the PowerShell script<br>(WinRM enabled once)</small></div>
+  </div>
+  <div class="grid g3" style="margin-top:26px">
+    <div class="card"><h3>1 · Connect</h3><p>Hostname/IP, user (<code>DOMAIN\user</code> or <code>user@domain</code>), password and a transport. “Test Connection” checks DNS, WinRM and your credentials.</p></div>
+    <div class="card"><h3>2 · Choose tasks</h3><p>Tabs by category, one card per operation. Operations that need input (an IP, an adapter, a share path…) show validated fields. Sensitive ones are amber with “!”.</p></div>
+    <div class="card"><h3>3 · Run &amp; watch</h3><p>Live, colour-coded output with a progress bar and a Stop button. Every run ends with a tally and a log file saved on the hosting machine.</p></div>
+  </div>
+</div></section>
+
+<section id="editions" class="alt"><div class="wrap">
+  <h2>Three editions</h2>
+  <p class="sub">Same idea, three front-ends. The live demo shows the Web-Service edition.</p>
+  <div class="grid g3">
+    <div class="card"><span class="tag">v4.0 · LIVE DEMO</span><h3>Web-Service Edition</h3><p>A network service you open from any browser. Runs on Windows (console, or installed as a Windows service) or Linux (systemd template included).</p>
+      <ul><li>Fixed port <code>3030</code></li><li>Python · Flask · pypsrp</li><li>Several people can use it from their own browsers</li><li>Server-side validation and danger gate</li></ul></div>
+    <div class="card"><span class="tag">v4.0</span><h3>Native Python GUI</h3><p>A desktop window (Tkinter) with the same operation catalogue and the same engine as the web edition — for one admin on one machine.</p>
+      <ul><li><code>PCAdminTool.pyw</code> + <code>install_and_run.bat</code></li><li>Python · pypsrp</li><li>Same Network Push &amp; Ping Monitor</li></ul></div>
+    <div class="card"><span class="tag warn">v3.6 · not updated</span><h3>PowerShell GUI</h3><p>A Windows Forms application in a single <code>.ps1</code>, no Python needed. It has the original operation set; the newer operations (DISM, VSS sizing, admin consoles, Network Push, Ping Monitor) are in the other two editions only.</p>
+      <ul><li><code>PCAdminTool.ps1</code> + <code>Run-AdminTool.bat</code></li><li>Windows PowerShell + .NET Forms</li></ul></div>
+  </div>
+</div></section>
+
+<section id="features"><div class="wrap">
+  <h2>What it can do</h2>
+  <p class="sub">Everything below is in the live demo.</p>
+  <div class="grid g3">
+    <div class="card"><h3>113 operations, 9 categories</h3><p>Cleanup · Disk · Performance · Windows Health · Network · Power Recycle · Remote Tools · Admin Consoles · Network Push. Browse them all <a href="#ops">below</a>.</p></div>
+    <div class="card"><h3>Network Push <span class="tag">v4.0</span></h3><p>Set a static IP, DHCP, flush DNS, reset TCP/IP or restart adapters by <b>pushing the command and not waiting</b> — the right design when the change itself cuts the connection. IP, mask, gateway and both DNS servers go in <b>one</b> command, after a read-only pre-check that refuses typos.</p></div>
+    <div class="card"><h3>Ping Monitor <span class="tag">v4.0</span></h3><p>Pings the host name and up to two IPs every second until you press Stop and shows <b>which IP is answering</b> — watch the old address go silent and the new one come alive, with WinRM reachability and DNS catch-up.</p></div>
+    <div class="card"><h3>Verified network changes <span class="tag">v3.8</span></h3><p>The classic network operations check what Windows really did and end with <b>SUCCESS / WARNING / FAILED</b>. An <b>auto-rollback</b> restores the old settings if the tool can no longer reach the PC.</p></div>
+    <div class="card"><h3>Input validation</h3><p>Every parameter has an allow-listed format (IPv4, subnet mask, computer name, adapter, service, UNC path, drive, VSS size, user account…). Checked in the browser for instant feedback <b>and</b> again on the server.</p></div>
+    <div class="card"><h3>Sensitive-operation gate</h3><p>Risky operations are amber with “!” and need a confirmation. The server also refuses them unless the request carries explicit confirmation, so a hand-made request can't skip the popup.</p></div>
+    <div class="card"><h3>Long jobs that survive</h3><p>Slow or connection-dropping operations run as background jobs on the target, with several launch fallbacks, a hard time limit and a heartbeat so a running job is never mistaken for a dead one.</p></div>
+    <div class="card"><h3>26 admin consoles</h3><p>Open Computer Management, Device Manager, Event Viewer, Services, Regedit, an elevated PowerShell and more <b>on the user's screen</b> — handy for walking someone through a fix.</p></div>
+    <div class="card"><h3>Logs &amp; tallies</h3><p>Each run writes a timestamped log on the hosting machine and ends with “N succeeded, N warning, N failed”. Stop ends a run cleanly at any point.</p></div>
+  </div>
+</div></section>
+
+<section id="try" class="alt try"><div class="wrap">
+  <h2>Try it — guided scenarios</h2>
+  <p class="sub">Each card opens the demo with that scenario loaded and explains what to look for.</p>
+  <div class="grid g3">
+    <a class="card" href="demo/?scenario=pushwatch"><span class="tag">FLAGSHIP</span><h3>Push an IP, then watch it live</h3><p>See “command pushed” at once, then the Ping Monitor shows the old IP die, a short outage, the new IP answering and the host name catching up.</p><span class="go">Open scenario &rarr;</span></a>
+    <a class="card" href="demo/?scenario=typo"><h3>The gateway typo</h3><p>IP <code>192.168.16.205</code> with gateway <code>192.168.6.1</code> — a mistake an older version silently accepted. The pre-check now refuses it before anything is sent.</p><span class="go">Open scenario &rarr;</span></a>
+    <a class="card" href="demo/?scenario=rollback"><h3>Auto-rollback safety net</h3><p>Point the verified Static IP at the wrong network: the PC reverts itself. Untick rollback and watch the tool lose it.</p><span class="go">Open scenario &rarr;</span></a>
+    <a class="card" href="demo/?scenario=health"><h3>Health check</h3><p>Four read-only reports with realistic output, the progress bar and the run summary.</p><span class="go">Open scenario &rarr;</span></a>
+    <a class="card" href="demo/?scenario=cleanup"><h3>Cleanup + danger popup</h3><p>Clear temp files and browser caches; empty the Recycle Bin behind a confirmation. Run twice — the second run frees almost nothing.</p><span class="go">Open scenario &rarr;</span></a>
+    <a class="card" href="demo/?scenario=validation"><h3>Input validation</h3><p>An invalid IP turns red and Run lists exactly what to fix.</p><span class="go">Open scenario &rarr;</span></a>
+  </div>
+  <p style="margin-top:18px">Prefer to explore on your own? <a href="demo/">Open the demo</a>, then use the <b>&lt;/&gt; script</b> button on any task to read the real PowerShell it would run.</p>
+</div></section>
+
+<section id="ops"><div class="wrap">
+  <h2>All operations</h2>
+  <p class="sub">Generated from the project's own source, so it always matches the tool. Amber = sensitive (asks for confirmation).</p>
+  <div class="explore">
+    <div class="ex-top"><input id="q" type="search" placeholder="Search operations… (e.g. dns, vss, usb, rename)"><div class="chips" id="chips"></div></div>
+    <div class="ex-list" id="exList"></div>
+    <div class="ex-foot" id="exFoot"></div>
+  </div>
+</div></section>
+
+<section id="install" class="alt"><div class="wrap">
+  <h2>Run the real thing</h2>
+  <p class="sub">Full step-by-step instructions for non-technical users are in the Setup &amp; User Guide in the repository. The short version:</p>
+  <div class="grid g2">
+    <div class="card"><h3>1 · On the target PC (once)</h3><p>Turn on WinRM in an elevated PowerShell:</p><pre>Enable-PSRemoting -Force</pre><p>You need an administrator account on the target.</p></div>
+    <div class="card"><h3>2 · On the hosting PC</h3><p>Web edition: install Python, then:</p><pre>pip install -r requirements.txt
+python app.py</pre><p>Open <code>http://&lt;hosting-PC-IP&gt;:3030</code>. On Windows you can also use <code>install_service.bat</code> to run it as a service.</p></div>
+  </div>
+  <div class="card" style="margin-top:16px"><h3>Good to know before you deploy</h3>
+    <ul><li>The tool talks WinRM over <b>HTTP (port 5985)</b>. NTLM, Kerberos and CredSSP protect the messages themselves; <b>Basic</b> does not — use it only on a network you trust.</li>
+      <li>Anyone on the allowed subnet who can reach port 3030 can open the web UI, so run it on a trusted management network and restrict who can reach it.</li>
+      <li>Logs are written on the hosting machine, not in the browser.</li></ul></div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Version history</h2>
+  <p class="sub">Highlights from the project's changelog.</p>
+  <div class="tl">
+    <div class="it"><b>v4.0 — Network Push &amp; Ping Monitor</b><p>The v16 “push and don't wait” method, done right, plus a continuous ping with live “which IP answers” view. New 9th category; 113 operations.</p></div>
+    <div class="it"><b>v3.9 — launcher fallbacks</b><p>When Windows refused the SYSTEM scheduled task (<code>0x80070005</code>), background jobs now fall back to a CIM process, then to a direct in-session run; heartbeat added.</p></div>
+    <div class="it"><b>v3.8 — verified network operations</b><p>RESULT lines (SUCCESS / WARNING / FAILED), one-shot IP+mask+gateway+DNS apply, auto-rollback, hard job time-out, fixed port 3030.</p></div>
+    <div class="it"><b>v3.7 — resilient jobs &amp; new tools</b><p>Detached jobs for network and long operations, domain-safe computer rename, VSS sizing, DISM and WMI tools, performance-counter rebuild, SSD retrim.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <p>© 2024-2026 Abdullah · PC Admin &amp; Performance Tool. This page is a static demo site; the demo's target PC, reports and numbers are simulated.</p>
+  <p><a href="demo/">Live demo</a> · <a href="https://github.com/MohamedAbdullahKhan/PC-AdminTools" target="_blank" rel="noopener">Source on GitHub</a></p>
+</div></footer>
+
+<script src="demo/ops-data.js"></script>
+<script>
+(function(){
+  const OPS = window.DEMO_OPS, CATS = window.DEMO_CATS;
+  document.getElementById('sOps').textContent = OPS.length; document.getElementById('sCats').textContent = CATS.length;
+  let cat = 'All', term = '';
+  const chips = document.getElementById('chips'), list = document.getElementById('exList'), foot = document.getElementById('exFoot');
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function count(c){ return c === 'All' ? OPS.length : OPS.filter(o => o.category === c).length; }
+  function renderChips(){
+    chips.innerHTML = '';
+    ['All'].concat(CATS).forEach(c => { const b = document.createElement('button'); b.className = 'chip' + (c === cat ? ' on' : ''); b.textContent = c + ' (' + count(c) + ')'; b.onclick = () => { cat = c; renderChips(); renderList(); }; chips.appendChild(b); });
+  }
+  function renderList(){
+    const t = term.trim().toLowerCase();
+    const rows = OPS.filter(o => (cat === 'All' || o.category === cat) && (!t || (o.label + ' ' + o.description + ' ' + o.id).toLowerCase().includes(t)));
+    list.innerHTML = rows.map(o => {
+      const f = []; if (o.danger) f.push('<i class="d">sensitive</i>'); if (o.push) f.push('<i>push</i>'); if (o.monitor) f.push('<i>live ping</i>'); if ((o.detached || o.net_disruptive) && !o.push) f.push('<i>background job</i>'); if (o.params && o.params.length) f.push('<i>' + o.params.length + ' input' + (o.params.length > 1 ? 's' : '') + '</i>');
+      return '<div class="op' + (o.danger ? ' d' : '') + '"><div class="n"><b>' + (o.danger ? '! ' : '') + esc(o.label) + '</b><span>' + esc(o.description) + '</span></div><div class="c">' + esc(o.category) + '</div><div class="f">' + f.join('') + '</div></div>';
+    }).join('') || '<div class="op"><div class="n"><span>No operation matches.</span></div></div>';
+    foot.textContent = rows.length + ' of ' + OPS.length + ' operations shown';
+  }
+  document.getElementById('q').oninput = e => { term = e.target.value; renderList(); };
+  renderChips(); renderList();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PC Admin &amp; Performance Tool -- Live Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="demo-ui.css">
+<style>
+  :root{
+    --bg:#111827; --pnl:#1a2438; --card:#1f2e47; --crd2:#263654;
+    --bdr:#2e4368; --bdr2:#3a5580; --acc:#1d4ed8; --cyan:#22d3ee;
+    --grn:#22c55e; --red:#ef4444; --yel:#f59e0b; --txt:#d1dff0;
+    --txtb:#eef2ff; --txdd:#5c7a9a; --logbg:#090f1a; --hdrb:#08111e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:"Segoe UI",Arial,sans-serif;}
+  header{background:var(--hdrb);padding:12px 20px;display:flex;
+         align-items:center;gap:12px;border-bottom:1px solid var(--bdr);}
+  header h1{font-size:16px;color:var(--txtb);margin:0;}
+  header .ver{color:var(--cyan);font-size:12px;}
+  header .cp{margin-left:auto;color:var(--txdd);font-size:11px;}
+  .wrap{display:flex;gap:14px;padding:14px;height:calc(100vh - 54px);}
+  .left{width:460px;display:flex;flex-direction:column;min-width:380px;}
+  .right{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .panel{background:var(--pnl);border:1px solid var(--bdr);border-radius:6px;
+         padding:10px 12px;margin-bottom:8px;}
+  .panel h3{margin:0 0 8px;font-size:12px;color:var(--txtb);
+             text-transform:uppercase;letter-spacing:.05em;}
+  label{display:block;font-size:11px;font-weight:600;color:var(--txt);
+        margin-top:6px;}
+  input[type=text],input[type=password],select{
+    width:100%;background:var(--logbg);color:var(--txtb);border:1px solid var(--bdr);
+    border-radius:4px;padding:7px 8px;margin-top:3px;font-size:13px;}
+  input:focus,select:focus{outline:none;border-color:var(--acc);}
+  .pwrow{display:flex;align-items:center;gap:6px;}
+  .pwrow input{flex:1;}
+  .pwrow span{font-size:11px;color:var(--txdd);white-space:nowrap;}
+  button{cursor:pointer;border:none;border-radius:4px;font-weight:700;
+         font-size:12px;}
+  .btn-primary{background:var(--acc);color:#fff;padding:9px;width:100%;
+               margin-top:10px;}
+  .btn-primary:hover{background:var(--cyan);}
+  .btn-run{background:var(--grn);color:#062b14;padding:11px 16px;font-size:13px;}
+  .btn-stop{background:var(--red);color:#fff;padding:11px 16px;font-size:13px;}
+  .btn-run:disabled,.btn-stop:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-ghost{background:var(--crd2);color:var(--txt);padding:6px 10px;}
+  .tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;}
+  .tabs button{flex:1 1 auto;min-width:64px;background:var(--crd2);color:var(--txt);padding:6px 4px;
+               font-size:10.5px;}
+  .tabs button.active{background:var(--acc);color:#fff;}
+  .tasklist{flex:1;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;
+            background:var(--bg);padding:4px;}
+  .task{display:flex;flex-wrap:wrap;align-items:flex-start;gap:10px;background:var(--card);
+        border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;
+        margin:4px 2px;cursor:pointer;}
+  .task:hover{border-color:var(--bdr2);}
+  .task .cbx{width:20px;height:20px;flex:none;border:2px solid #fff;
+             border-radius:3px;position:relative;margin-top:1px;}
+  .task.checked .cbx{background:var(--red);}
+  .task.checked .cbx::after{content:"";position:absolute;left:4px;top:8px;
+      width:9px;height:5px;border-left:2px solid #fff;border-bottom:2px solid #fff;
+      transform:rotate(-45deg);}
+  .task .info{flex:1;min-width:0;}
+  .task .lbl{font-size:12.5px;font-weight:700;color:var(--txtb);}
+  .task.danger .lbl{color:var(--yel);}
+  .task .desc{font-size:11px;color:var(--txdd);margin-top:2px;}
+  .task .cat{font-size:9px;background:var(--crd2);color:#8ab0cc;padding:2px 6px;
+             border-radius:3px;white-space:nowrap;}
+  .task .params{flex:0 0 100%;width:100%;margin-top:8px;padding-top:8px;border-top:1px dashed var(--bdr2);
+                display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;}
+  .task .params .pf{display:flex;flex-direction:column;}
+  .task .params .pf.wide{grid-column:1 / -1;}
+  .task .params label{font-size:9.5px;color:var(--txdd);margin:0 0 2px;font-weight:600;
+                       text-transform:none;}
+  .task .params input{width:100%;background:var(--logbg);color:var(--txtb);
+                       border:1px solid var(--bdr);border-radius:3px;padding:5px 6px;
+                       font-size:11.5px;margin-top:0;}
+  .task .params input.invalid{border-color:var(--red);}
+  .task .params input:focus{outline:none;border-color:var(--acc);}
+  .task .params .pf-bool{padding-top:2px;}
+  .task .params .chk-label{display:flex;align-items:center;gap:8px;cursor:pointer;
+                            font-size:12px;color:var(--txtb);font-weight:600;}
+  .task .params .chk-label input[type="checkbox"]{width:16px;height:16px;margin:0;flex:none;accent-color:var(--acc);}
+  .task .params .chk-help{font-size:9.5px;color:var(--txdd);margin:3px 0 0 24px;}
+  .selrow{display:flex;gap:6px;margin-top:6px;}
+  .selrow button{flex:1;padding:6px;}
+  .count{font-size:11px;color:var(--cyan);font-weight:700;margin-top:4px;}
+  .runrow{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  progress{flex:1;height:10px;accent-color:var(--acc);}
+  .statusline{display:flex;justify-content:space-between;font-size:11px;
+              color:var(--txt);margin-bottom:6px;}
+  .dot{color:var(--txdd);}
+  .dot.live{color:var(--grn);}
+  #log{flex:1;background:var(--logbg);border:1px solid var(--bdr);border-radius:6px;
+       overflow-y:auto;padding:10px 12px;font:12px/1.5 Consolas,monospace;
+       white-space:pre-wrap;word-break:break-word;}
+  .l-hdr{color:var(--cyan);font-weight:700;}
+  .l-info{color:var(--cyan);}
+  .l-ok,.l-success{color:var(--grn);}
+  .l-warn,.l-warning{color:var(--yel);}
+  .l-err,.l-error{color:var(--red);}
+  .l-dim{color:var(--txdd);}
+  .l-task{color:var(--txtb);font-weight:700;}
+  .l-out,.l-output{color:#8ab0cc;}
+</style>
+</head>
+<body>
+<div id="demoBar">
+  <div class="db-l"><span class="db-badge">LIVE DEMO</span>Simulated target <b>DEMO-PC01</b> &mdash; nothing is sent to any real computer. The interface, the 113 operations and their PowerShell scripts are the real ones.</div>
+  <div class="db-r">
+    <label for="scen">Try a scenario:</label>
+    <select id="scen"><option value="">&mdash; pick one &mdash;</option>
+      <option value="health">Health check (4 reports)</option>
+      <option value="cleanup">Cleanup run (+ danger popup)</option>
+      <option value="pushwatch">Push a static IP, then watch it live</option>
+      <option value="typo">The gateway-typo that v16 missed</option>
+      <option value="rollback">Auto-rollback safety net</option>
+      <option value="validation">Input validation</option>
+      <option value="reboot">Forced restart (then ping it)</option>
+    </select><button id="scenGo">Load</button>
+    <label for="spd">Speed:</label>
+    <select id="spd"><option value="1">Normal</option><option value="0.35">Fast</option><option value="0">Instant</option></select>
+    <button id="dlLast" title="Download the log of the last run">&#11015; Last log</button>
+    <a class="db-link" href="../">About</a>
+    <a class="db-link" href="https://github.com/MohamedAbdullahKhan/PC-AdminTools" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</div>
+<div id="scenHint"></div>
+<div id="scrModal"><div class="box">
+  <div class="mh"><h4 id="scrTitle"></h4><button id="scrCopy">Copy</button><button id="scrClose">Close</button></div>
+  <div class="note">This is the real PowerShell the tool sends to the target PC (with your current parameter values filled in). The demo only <b>shows</b> it &mdash; it is never executed.</div>
+  <pre id="scrCode"></pre>
+</div></div>
+<header>
+  <h1>PC ADMIN &amp; PERFORMANCE TOOL</h1>
+  <span class="ver">v4.0 &middot; Web-Service Edition &middot; port 3030</span>
+  <span class="cp">&copy; 2024-2026 Abdullah | PC Admin &amp; Performance Tool v4.0 &mdash; live demo</span>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <div class="panel">
+      <h3>Target Connection</h3>
+      <label>Hostname / IP</label>
+      <input type="text" id="hostname" placeholder="e.g. 192.168.1.50 or PC-NAME">
+      <label>Username (DOMAIN\user or user@domain.local)</label>
+      <input type="text" id="username">
+      <label>Password</label>
+      <div class="pwrow">
+        <input type="password" id="password">
+        <span><input type="checkbox" id="showpw" onclick="togglePw()"> show</span>
+      </div>
+      <label>Auth Transport</label>
+      <select id="transport">
+        <option value="ntlm">Windows Domain (NTLM) -- Recommended</option>
+        <option value="basic">Workgroup / Local Account (Basic)</option>
+        <option value="kerberos">Active Directory (Kerberos)</option>
+        <option value="credssp">Admin Double-Hop (CredSSP)</option>
+      </select>
+      <button class="btn-primary" id="btnTest" onclick="testConnection()">Test Connection</button>
+    </div>
+
+    <div class="tabs" id="tabs"></div>
+    <div class="tasklist" id="tasklist"></div>
+    <div class="selrow">
+      <button class="btn-ghost" onclick="selectAll()">Select All</button>
+      <button class="btn-ghost" onclick="selectNone()">Select None</button>
+    </div>
+    <div class="count" id="count">0 tasks selected</div>
+  </div>
+
+  <div class="right">
+    <div class="runrow">
+      <button class="btn-run" id="btnRun" onclick="runTasks()">&#9654; RUN SELECTED TASKS</button>
+      <button class="btn-stop" id="btnStop" disabled onclick="stopTasks()">&#9632; STOP</button>
+      <progress id="prg" value="0" max="100"></progress>
+      <button class="btn-ghost" onclick="loadLogs()">View Logs</button>
+    </div>
+    <div class="statusline">
+      <span><span class="dot" id="dot">&#9679;</span> <span id="stat">Idle</span></span>
+      <span id="taskline"></span>
+    </div>
+    <div id="log"></div>
+    <div class="panel" id="logsPanel" style="display:none;max-height:160px;overflow-y:auto;margin-top:8px;"></div>
+  </div>
+</div>
+
+<script src="ops-data.js"></script>
+<script src="demo-engine.js"></script>
+<script src="demo-sims-1.js"></script>
+<script src="demo-sims-2.js"></script>
+<script>
+const OPS = window.DEMO_OPS;
+const CATS = window.DEMO_CATS;
+// v3.2: a param can also carry "wide": true to force full-width layout
+// regardless of how many sibling params it has (used by SHARE_PATH, since
+// a UNC path is long) -- see KIND_HINTS below for the tooltip/error text.
+// v3.1: danger is now real metadata on every op (see OPS_META in app.py) --
+// derived here instead of a hand-maintained list, so it can never drift.
+const DANGER_IDS = new Set(OPS.filter(o => o.danger).map(o => o.id));
+let selected = new Set();
+let paramValues = {};   // {op_id: {KEY: value}}
+OPS.forEach(op => {
+  if(op.params && op.params.length){
+    paramValues[op.id] = {};
+    op.params.forEach(p => { paramValues[op.id][p.key] = p.default || ''; });
+  }
+});
+let activeCat = "all";
+let running = false;
+let stopRequested = false;
+
+// Client-side mirror of app.py's PARAM_VALIDATORS, for immediate feedback
+// only -- the server re-validates every value regardless, this is UX not security.
+const KIND_PATTERNS = {
+  ipv4: /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/,
+  subnetmask: /^([0-9]|[12][0-9]|3[0-2])$|^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/,
+  computername: /^[A-Za-z0-9]([A-Za-z0-9-]{0,13}[A-Za-z0-9])?$/,
+  adaptername: /^[A-Za-z0-9 ()./#_-]{1,64}$/,
+  servicename: /^[A-Za-z0-9 _.$#+()-]{1,256}$/,
+  taskname: /^[A-Za-z0-9 _.\\-]{1,200}$/,
+  deviceid: /^[A-Za-z0-9\\&_{}-]{1,300}$/,
+  drive: /^[A-Za-z]:?$/,
+  uncpath: /^\\\\[A-Za-z0-9][A-Za-z0-9._-]{0,200}(?:\\(?!\.+(?:\\|$))[A-Za-z0-9 _.$#@&+(),~-]{1,80}){1,30}$/,
+  mapdrive: /^[D-Zd-z]:?$/,
+  vsssize: /^(?:UNBOUNDED|\d{1,3}%|\d{1,7}(?:MB|GB|TB))$/i,
+  useraccount: /^(?:(?:\.|[A-Za-z0-9][A-Za-z0-9._-]{0,62})\\)?[A-Za-z0-9_.-][A-Za-z0-9 _.-]{0,63}$|^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/,
+};
+// Human-readable format per kind: shown in the "Fix these before running" popup and as the field tooltip.
+const KIND_HINTS = {
+  ipv4: 'a dotted IPv4 address, e.g. 192.168.1.100',
+  subnetmask: 'a dotted mask such as 255.255.255.0, or a CIDR number 0-32',
+  computername: '1-15 letters, digits or hyphens (no leading/trailing hyphen)',
+  adaptername: 'letters, digits, spaces and ( ) . / # _ -',
+  servicename: 'the exact service Name: letters, digits, spaces and _ . - $ # + ( ) (max 256 chars)',
+  taskname: 'letters, digits, spaces and _ . - \\',
+  deviceid: 'a PNP Instance ID copied exactly from a device list',
+  drive: 'one drive letter, e.g. C',
+  uncpath: 'a UNC path such as \\\\server\\share or \\\\server\\share\\folder (backslashes)',
+  mapdrive: 'a drive letter D to Z (A, B and C are reserved)',
+  useraccount: 'DOMAIN\\user, user@domain.com or .\\localuser',
+  vsssize: 'a size such as 10GB, 500MB (min 320MB), 20% or UNBOUNDED',
+};
+// Normalisations the server also applies before validating -- kept identical so client and server agree.
+const KIND_NORMALIZE = {
+  vsssize: s => s.replace(/\s+/g, ''),
+  uncpath: s => s.replace(/\\+$/, ''),
+};
+function clientValid(kind, raw){
+  const pat = KIND_PATTERNS[kind];
+  if(!pat) return true;
+  let s = raw.trim();
+  if(KIND_NORMALIZE[kind]) s = KIND_NORMALIZE[kind](s);
+  if(kind === 'uncpath' && s.length > 260) return false;
+  return pat.test(s);
+}
+
+function togglePw(){
+  document.getElementById('password').type =
+    document.getElementById('showpw').checked ? 'text' : 'password';
+}
+
+function buildTabs(){
+  const tabs = document.getElementById('tabs');
+  const mk = (key, label) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.className = (key === activeCat) ? 'active' : '';
+    b.onclick = () => { activeCat = key; renderTasks(); };
+    tabs.appendChild(b);
+  };
+  mk('all', 'All');
+  CATS.forEach(c => mk(c, c));
+}
+
+function renderTasks(){
+  document.querySelectorAll('#tabs button').forEach((b,i) => {
+    const key = i === 0 ? 'all' : CATS[i-1];
+    b.className = (key === activeCat) ? 'active' : '';
+  });
+  const list = document.getElementById('tasklist');
+  list.innerHTML = '';
+  OPS.filter(o => activeCat === 'all' || o.category === activeCat).forEach(op => {
+    const danger = DANGER_IDS.has(op.id);
+    const row = document.createElement('div');
+    row.className = 'task' + (selected.has(op.id) ? ' checked' : '') + (danger ? ' danger' : '');
+    row.innerHTML = `<div class="cbx"></div>
+      <div class="info">
+        <div class="lbl">${danger ? '! ' : ''}${op.label}</div>
+        <div class="desc">${op.description}</div>
+      </div>
+      <div class="cat">${op.category}</div>
+      <button class="scr" title="Show the real PowerShell for this operation">&lt;/&gt; script</button>`;
+    row.onclick = () => {
+      if (selected.has(op.id)) selected.delete(op.id); else selected.add(op.id);
+      renderTasks(); updateCount();
+    };
+    row.querySelector('.scr').onclick = (e) => { e.stopPropagation(); showScript(op.id); };
+    if(op.params && op.params.length){
+      const pdiv = document.createElement('div');
+      pdiv.className = 'params';
+      pdiv.onclick = (e) => e.stopPropagation();
+      op.params.forEach(p => {
+        const wrap = document.createElement('div');
+        wrap.className = 'pf' + ((op.params.length === 1 || p.wide) ? ' wide' : '');
+        if(p.kind === 'bool'){
+          wrap.className = 'pf wide pf-bool';
+          const lbl2 = document.createElement('label');
+          lbl2.className = 'chk-label';
+          const chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.checked = (paramValues[op.id][p.key] || 'true') !== 'false';
+          chk.onchange = () => { paramValues[op.id][p.key] = chk.checked ? 'true' : 'false'; };
+          const span = document.createElement('span');
+          span.textContent = p.label;
+          lbl2.appendChild(chk); lbl2.appendChild(span);
+          wrap.appendChild(lbl2);
+          if(p.help){
+            const hint = document.createElement('div');
+            hint.className = 'chk-help';
+            hint.textContent = p.help;
+            wrap.appendChild(hint);
+          }
+          pdiv.appendChild(wrap);
+          return;
+        }
+        const lbl = document.createElement('label');
+        lbl.textContent = p.label + (p.required === false ? ' (optional)' : '');
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = paramValues[op.id][p.key] || '';
+        inp.placeholder = p.help || p.default || '';
+        inp.title = KIND_HINTS[p.kind] || '';
+        inp.oninput = () => {
+          paramValues[op.id][p.key] = inp.value;
+          const raw = inp.value.trim();
+          const ok = raw === '' ? (p.required === false) : clientValid(p.kind, raw);
+          inp.classList.toggle('invalid', !ok);
+        };
+        wrap.appendChild(lbl); wrap.appendChild(inp);
+        pdiv.appendChild(wrap);
+      });
+      row.appendChild(pdiv);
+    }
+    list.appendChild(row);
+  });
+}
+
+
+function updateCount(){
+  const n = selected.size;
+  document.getElementById('count').textContent = `${n} task${n!==1?'s':''} selected`;
+}
+
+function selectAll(){
+  OPS.filter(o => activeCat === 'all' || o.category === activeCat)
+     .forEach(o => selected.add(o.id));
+  renderTasks(); updateCount();
+}
+function selectNone(){ selected.clear(); renderTasks(); updateCount(); }
+
+function logLine(tag, text){
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = 'l-' + tag;
+  line.textContent = text;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function testConnection(){
+  const hostname = document.getElementById('hostname').value.trim();
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const transport = document.getElementById('transport').value;
+  if(!hostname){ alert('Enter hostname or IP.'); return; }
+  if(!username){ alert('Enter credentials.'); return; }
+  const btn = document.getElementById('btnTest');
+  btn.disabled = true; btn.textContent = 'Testing...';
+  try{
+    const r = await fetch('/api/test', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hostname, username, password, transport})});
+    const data = await r.json();
+    logLine(data.status === 'success' ? 'ok' : 'err', '  ' + data.msg);
+    alert(data.msg);
+  }catch(e){ alert('Request failed: ' + e); }
+  btn.disabled = false; btn.textContent = 'Test Connection';
+}
+
+function tagFor(type){
+  return ['header','info','dim','success','error','warning','task_start','output']
+    .includes(type) ? type.replace('task_start','task').replace('header','hdr')
+      .replace('success','ok').replace('error','err').replace('warning','warn')
+      .replace('output','out') : type;
+}
+
+async function runTasks(){
+  if(running) return;
+  const hostname = document.getElementById('hostname').value.trim();
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const transport = document.getElementById('transport').value;
+  if(selected.size === 0){ alert('Select at least one task.'); return; }
+  if(!hostname){ alert('Enter hostname or IP.'); return; }
+  if(!username){ alert('Enter credentials.'); return; }
+
+  // Validate every parameter field belonging to a SELECTED op before we
+  // even open the SSE connection -- the server re-validates regardless,
+  // this just avoids a round trip for an obvious typo.
+  const paramIssues = [];
+  const runParams = {};
+  for(const id of selected){
+    const op = OPS.find(o => o.id === id);
+    if(!op.params || !op.params.length) continue;
+    runParams[id] = {};
+    for(const p of op.params){
+      let raw = (paramValues[id][p.key] || '').trim();
+      if(!raw && p.default) raw = p.default;
+      if(!raw){
+        if(p.required !== false) paramIssues.push(`${op.label} -> ${p.label} is required`);
+        runParams[id][p.key] = '';
+        continue;
+      }
+      if(!clientValid(p.kind, raw)) paramIssues.push(`${op.label} -> ${p.label}: "${raw}" is not valid -- expected ${KIND_HINTS[p.kind] || 'a different format'}`);
+      runParams[id][p.key] = raw;
+    }
+  }
+  if(paramIssues.length){
+    alert('Fix these before running:\n\n' + paramIssues.map(s => '  * ' + s).join('\n'));
+    return;
+  }
+
+  const dangerSel = [...selected].filter(id => DANGER_IDS.has(id));
+  if(dangerSel.length){
+    const names = dangerSel.map(id => '  * ' + OPS.find(o=>o.id===id).label).join('\n');
+    if(!confirm(`WARNING: ${dangerSel.length} sensitive op(s):\n\n${names}\n\n` +
+      `Some require reboots or may interrupt network.\n\nContinue?`)) return;
+  }
+
+  running = true; stopRequested = false;
+  document.getElementById('btnRun').disabled = true;
+  document.getElementById('btnStop').disabled = false;
+  document.getElementById('dot').className = 'dot live';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('prg').value = 0;
+
+  const resp = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({hostname, username, password, transport, tasks:[...selected],
+                           params: runParams, confirmed_danger: dangerSel.length > 0})});
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    buf += decoder.decode(value, {stream:true});
+    let parts = buf.split('\n\n');
+    buf = parts.pop();
+    for(const p of parts){
+      if(!p.startsWith('data: ')) continue;
+      let ev;
+      try{ ev = JSON.parse(p.slice(6)); }catch(e){ continue; }
+      handleEvent(ev);
+    }
+  }
+  running = false;
+  document.getElementById('btnRun').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  document.getElementById('dot').className = 'dot';
+}
+
+function handleEvent(ev){
+  if(ev.type === 'progress'){ document.getElementById('prg').value = ev.value; return; }
+  if(ev.type === 'task_start'){
+    document.getElementById('taskline').textContent = ev.text;
+    document.getElementById('stat').textContent = `[${ev.idx+1}/${ev.total}] ${ev.label}`;
+    logLine('task', ev.text); return;
+  }
+  if(ev.type === 'blank'){ logLine('dim', ''); return; }
+  if(ev.type === 'done'){
+    document.getElementById('stat').textContent =
+      ev.success ? 'All tasks completed -- log saved' : 'Stopped / completed with errors -- review log';
+    document.getElementById('taskline').textContent = '';
+    return;
+  }
+  logLine(tagFor(ev.type), ev.text || '');
+}
+
+async function stopTasks(){
+  stopRequested = true;
+  await fetch('/api/stop', {method:'POST'});
+  logLine('warn', '  ! STOP requested -- finishing current task...');
+}
+
+async function loadLogs(){
+  const panel = document.getElementById('logsPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if(panel.style.display === 'none') return;
+  const r = await fetch('/api/logs');
+  const logs = await r.json();
+  panel.innerHTML = '<h3>Recent Logs (this demo session -- click to download)</h3>' +
+    (logs.length ? logs.map(l => `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--bdr)">
+        <a href="#" onclick="return dlLog('${l.name}')" style="color:var(--cyan)" title="download">${l.name}</a> &middot; ${l.size} bytes &middot; ${l.modified}</div>`).join('')
+      : '<div style="font-size:11px;color:var(--txdd)">No logs yet</div>');
+}
+
+buildTabs();
+renderTasks();
+</script>
+<script src="demo-ui.js"></script>
+</body>
+</html>

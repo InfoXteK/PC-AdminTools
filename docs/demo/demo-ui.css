@@ -1,0 +1,30 @@
+/* Demo-only chrome. Everything below the banner is the real tool's own stylesheet. */
+:root{--demoH:0px}
+#demoBar{background:linear-gradient(90deg,#0b3b8f,#1d4ed8 55%,#0e7490);color:#fff;padding:8px 16px;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:12px;border-bottom:1px solid #2e4368}
+#demoBar .db-badge{background:#f59e0b;color:#1a1200;font-weight:800;padding:2px 8px;border-radius:3px;letter-spacing:.06em;margin-right:8px}
+#demoBar .db-l{flex:1 1 420px;line-height:1.45}
+#demoBar .db-r{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+#demoBar select,#demoBar button,#demoBar a.db-link{background:#0a1730;color:#eaf2ff;border:1px solid #3a5580;border-radius:4px;padding:5px 8px;font-size:12px;text-decoration:none;cursor:pointer}
+#demoBar button:hover,#demoBar a.db-link:hover{background:#13306a}
+#demoBar label{opacity:.85}
+#scenHint{display:none;background:#10243f;border-bottom:1px solid #2e4368;color:#b9d4f0;padding:7px 16px;font-size:12px;line-height:1.5}
+#scenHint b{color:#fcd34d}
+.wrap{height:calc(100vh - 54px - var(--demoH))}
+.task .scr{margin-left:auto;background:#0b1424;color:#7dd3fc;border:1px solid var(--bdr2);border-radius:3px;padding:2px 7px;font:600 10px Consolas,monospace;cursor:pointer;align-self:flex-start}
+.task .scr:hover{background:#12345f;color:#fff}
+#scrModal{display:none;position:fixed;inset:0;background:rgba(3,8,18,.78);z-index:50;align-items:center;justify-content:center;padding:18px}
+#scrModal .box{background:#0f1a2e;border:1px solid var(--bdr2);border-radius:8px;max-width:980px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+#scrModal .mh{padding:12px 16px;border-bottom:1px solid var(--bdr);display:flex;gap:10px;align-items:center}
+#scrModal .mh h4{margin:0;font-size:14px;color:var(--txtb);flex:1}
+#scrModal .mh button{background:var(--crd2);color:var(--txt);padding:6px 10px}
+#scrModal .note{padding:8px 16px;font-size:11.5px;color:#fcd34d;background:#1c1a0c;border-bottom:1px solid #3a3210}
+#scrModal pre{margin:0;padding:14px 16px;overflow:auto;font:12px/1.5 Consolas,monospace;color:#cfe3ff;white-space:pre;flex:1}
+#scrModal .badge{font-size:10px;padding:2px 6px;border-radius:3px;background:var(--crd2);color:#8ab0cc;margin-right:4px}
+#scrModal .badge.d{background:#4a2a07;color:#fbbf24}
+.l-demo{color:#7dd3fc}
+@media (max-width:900px){
+  .wrap{flex-direction:column;height:auto}
+  .left{width:auto;min-width:0}
+  .tasklist{max-height:60vh}
+  #log{min-height:380px}
+}
