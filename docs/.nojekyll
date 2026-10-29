@@ -1,6 +1,1 @@
-git clone https://github.com/MohamedAbdullahKhan/PC-AdminTools.git
-cd PC-AdminTools
-# copy docs/ tools/ (and tests/) from this package into the repo folder
-git add docs tools
-git commit -m "Add GitHub Pages live demo"
-git push
+
